@@ -107,19 +107,27 @@ def build_season_summary(weekly: pl.DataFrame) -> pl.DataFrame:
     return season_summary
 
 
-def main():
-    print("Loading historical player stats (this may take a while on first run)...")
-    weekly_stats = load_historical_stats(max_seasons_back=20)
+def main(force_recompute: bool = False):
+    from pathlib import Path
 
-    print("Computing Full PPR fantasy points per game...")
-    weekly_with_points = compute_fantasy_points(weekly_stats)
+    out_path = Path("fantasy_points_by_season.csv")
 
-    print("Building season-level summary...")
-    season_summary = build_season_summary(weekly_with_points)
+    if out_path.exists() and not force_recompute:
+        print(f"{out_path} already exists — skipping recompute.")
+        print("(pass --force to recompute anyway)")
+        season_summary = pl.read_csv(out_path)
+    else:
+        print("Loading historical player stats (this may take a while on first run)...")
+        weekly_stats = load_historical_stats(max_seasons_back=20)
 
-    out_path = "fantasy_points_by_season.csv"
-    season_summary.write_csv(out_path)
-    print(f"Done. Wrote {season_summary.height} player-season rows to {out_path}")
+        print("Computing Full PPR fantasy points per game...")
+        weekly_with_points = compute_fantasy_points(weekly_stats)
+
+        print("Building season-level summary...")
+        season_summary = build_season_summary(weekly_with_points)
+
+        season_summary.write_csv(out_path)
+        print(f"Done. Wrote {season_summary.height} player-season rows to {out_path}")
 
     # Quick sanity check — top 10 player-seasons by total fantasy points,
     # across ALL seasons (not just the most recent one). This re-sorts by
@@ -130,4 +138,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    main(force_recompute="--force" in sys.argv)
