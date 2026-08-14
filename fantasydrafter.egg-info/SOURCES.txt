@@ -1,0 +1,10 @@
+dev-requirements.txt
+pyproject.toml
+fantasydrafter/__init__.py
+fantasydrafter/__main__.py
+fantasydrafter.egg-info/PKG-INFO
+fantasydrafter.egg-info/SOURCES.txt
+fantasydrafter.egg-info/dependency_links.txt
+fantasydrafter.egg-info/requires.txt
+fantasydrafter.egg-info/top_level.txt
+tests/test_fantasydrafter.py
