@@ -2,9 +2,10 @@
 grid_search.py
 
 Searches the projection model's tunable knobs (LOOKBACK_SEASONS, DECAY,
-AGE_TREND_DAMPENING, and per-position AGE_CURVES) against
-bin/backtest.py's accuracy metrics, then reports the best combination
-found. Does NOT touch tiering/VBD knobs (TIER_GAP_PCT_THRESHOLD etc.) or
+AGE_TREND_DAMPENING, per-position AGE_CURVES, and
+TEAM_OFFENSE_ADJUSTMENT_STRENGTH) against bin/backtest.py's accuracy
+metrics, then reports the best combination found. Does NOT touch
+tiering/VBD knobs (TIER_GAP_PCT_THRESHOLD etc.) or
 EXCLUDED_ROSTER_STATUSES/MIN_RES_STREAK_WEEKS — those aren't predictions
 with ground truth to optimize against (VBD/tiers are draft-strategy
 overlays; the roster-status knobs were calibrated against specific known
@@ -17,14 +18,15 @@ cell, unweighted — i.e. WR (the most players) doesn't dominate the score
 just by sample size, and getting the draft ORDER right matters more here
 than raw point totals (that's what the model is actually used for).
 
-Network-dependent data (ages, rosters, roster status) for each backtest
-year is fetched ONCE via bin.backtest.load_year_context() and reused
-across every grid point — only the config-dependent computation
-(recency_weighted_projection, age adjustment) reruns per candidate.
+Network-dependent data (ages, rosters, roster status, team offense
+strength) for each backtest year is fetched ONCE via
+bin.backtest.load_year_context() and reused across every grid point —
+only the config-dependent computation (recency_weighted_projection, age
+adjustment, team offense adjustment) reruns per candidate.
 
 Search is staged, not one full joint grid (LOOKBACK_SEASONS x DECAY x
-AGE_TREND_DAMPENING x 4 positions x 2 curve params is combinatorially
-infeasible to search jointly):
+AGE_TREND_DAMPENING x 4 positions x 2 curve params x team strength is
+combinatorially infeasible to search jointly):
   1. LOOKBACK_SEASONS x DECAY, jointly (most fundamental — how much
      history, how heavily weighted — and they interact with each other).
   2. AGE_TREND_DAMPENING, holding the winners from step 1.
@@ -32,6 +34,7 @@ infeasible to search jointly):
      independently, holding steps 1-2's winners — independently valid
      since a position's curve only affects that position's own players,
      not a simplification that loses anything.
+  4. TEAM_OFFENSE_ADJUSTMENT_STRENGTH, holding steps 1-3's winners.
 
 Caveat: this optimizes against the same 2021-2025 window bin/backtest.py
 uses by default. With ~5 years of data there's a real risk of tuning to
@@ -57,6 +60,7 @@ from lib.config import (
     DECAY,
     AGE_CURVES,
     AGE_TREND_DAMPENING,
+    TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
 )
 
 
@@ -127,13 +131,24 @@ def search_age_trend_dampening(season_summary, year_contexts, years, lookback, d
 
 
 def search_age_curves(season_summary, year_contexts, years, lookback, decay, dampening) -> dict:
+    """
+    Fixed, ABSOLUTE search grids for peak_age/decline_per_year — NOT
+    centered on whatever's currently in config.py. Centering on the
+    current value lets the window walk arbitrarily far from a sane
+    range across repeated runs (found empirically: RB peak_age drifted
+    27 -> 23 -> 19 over two successive searches, each one re-centering
+    on the last run's already-shifted result, with no sign of
+    converging) — that's a search-methodology artifact, not a real
+    signal. A fixed grid means every run searches the same space
+    regardless of what's currently applied.
+    """
     working_curves = dict(AGE_CURVES)
+    peak_grid = [21, 23, 25, 27, 29, 31, 33]
+    decline_grid = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10]
 
     print("\n--- Stage 3: per-position AGE_CURVES (peak_age, decline_per_year) ---")
     for position in ["QB", "RB", "WR", "TE"]:
         default_peak, default_decline = AGE_CURVES[position]
-        peak_grid = [default_peak - 4, default_peak - 2, default_peak, default_peak + 2, default_peak + 4]
-        decline_grid = [0.0, default_decline * 0.5, default_decline, default_decline * 1.5, default_decline * 2.0]
 
         best = (default_peak, default_decline, float("-inf"))
         for peak, decline in itertools.product(peak_grid, decline_grid):
@@ -156,6 +171,29 @@ def search_age_curves(season_summary, year_contexts, years, lookback, decay, dam
     return working_curves
 
 
+def search_team_offense_strength(season_summary, year_contexts, years, lookback, decay, dampening, curves) -> tuple[float, float]:
+    strength_grid = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5]
+
+    best = (TEAM_OFFENSE_ADJUSTMENT_STRENGTH, float("-inf"))
+    print(f"\n--- Stage 4: TEAM_OFFENSE_ADJUSTMENT_STRENGTH ({len(strength_grid)} values) ---")
+    for strength in strength_grid:
+        joined = evaluate(
+            season_summary, year_contexts, years,
+            lookback_seasons=lookback, decay=decay,
+            age_curves=curves, age_trend_dampening=dampening,
+            team_offense_adjustment_strength=strength,
+        )
+        if joined is None:
+            continue
+        score = mean_rank_correlation(joined)
+        if score > best[1]:
+            best = (strength, score)
+            print(f"  new best: team_offense_adjustment_strength={strength} -> mean_rank_correlation={score:.4f}")
+
+    print(f"  Stage 4 winner: TEAM_OFFENSE_ADJUSTMENT_STRENGTH={best[0]} (mean_rank_correlation={best[1]:.4f})")
+    return best
+
+
 def main(years: list[int]):
     season_summary = load_season_summary()
 
@@ -169,11 +207,15 @@ def main(years: list[int]):
     best_lookback, best_decay, _ = search_lookback_and_decay(season_summary, year_contexts, years)
     best_dampening, _ = search_age_trend_dampening(season_summary, year_contexts, years, best_lookback, best_decay)
     best_curves = search_age_curves(season_summary, year_contexts, years, best_lookback, best_decay, best_dampening)
+    best_team_strength, _ = search_team_offense_strength(
+        season_summary, year_contexts, years, best_lookback, best_decay, best_dampening, best_curves
+    )
 
     final = evaluate(
         season_summary, year_contexts, years,
         lookback_seasons=best_lookback, decay=best_decay,
         age_curves=best_curves, age_trend_dampening=best_dampening,
+        team_offense_adjustment_strength=best_team_strength,
     )
     final_score = mean_rank_correlation(final) if final is not None else float("-inf")
 
@@ -192,6 +234,7 @@ def main(years: list[int]):
         old_peak, old_decline = AGE_CURVES[pos]
         print(f'    "{pos}": ({peak}, {decline:.3f}),   # was ({old_peak}, {old_decline:.3f})')
     print("}")
+    print(f"TEAM_OFFENSE_ADJUSTMENT_STRENGTH = {best_team_strength}   (was {TEAM_OFFENSE_ADJUSTMENT_STRENGTH})")
 
 
 if __name__ == "__main__":

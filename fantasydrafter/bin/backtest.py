@@ -38,12 +38,21 @@ from bin.projection_model import (
     load_player_ages,
     recency_weighted_projection,
     apply_age_adjustment,
-    load_currently_rostered_ids,
+    load_player_teams,
     load_current_roster_status,
     filter_excluded_roster_status,
+    load_team_offense_strength,
+    apply_team_offense_adjustment,
     add_position_rank,
 )
-from lib.config import CURRENT_SEASON_OVERRIDE, LOOKBACK_SEASONS, DECAY, AGE_CURVES, AGE_TREND_DAMPENING
+from lib.config import (
+    CURRENT_SEASON_OVERRIDE,
+    LOOKBACK_SEASONS,
+    DECAY,
+    AGE_CURVES,
+    AGE_TREND_DAMPENING,
+    TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
+)
 
 POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -51,13 +60,28 @@ POSITIONS = ["QB", "RB", "WR", "TE"]
 def load_year_context(year: int) -> dict:
     """
     Network-dependent data for a backtest year that does NOT change
-    across config variations (ages, rostered ids, roster status) — fetch
-    once per year and reuse across as many scoring calls as needed.
+    across config variations (ages, rostered ids/teams, roster status,
+    team offense strength) — fetch once per year and reuse across as
+    many scoring calls as needed.
+
+    load_player_teams() is fetched once and used to derive rostered_ids
+    directly (rather than also calling load_currently_rostered_ids(),
+    which would repeat the same load_rosters() network call).
+
+    team_offense uses load_team_offense_strength()'s own default
+    LOOKBACK_SEASONS/DECAY regardless of any lookback_seasons/decay
+    override passed to score_year — kept independent of the player-level
+    search so grid_search.py's LOOKBACK_SEASONS/DECAY stage doesn't
+    inadvertently also move the team-level signal; only
+    team_offense_adjustment_strength is meant to be tuned per-call.
     """
+    player_teams = load_player_teams(year)
     return {
         "ages": load_player_ages(year),
-        "rostered_ids": load_currently_rostered_ids(year),
+        "player_teams": player_teams,
+        "rostered_ids": None if player_teams is None else set(player_teams["player_id"].to_list()),
         "roster_status": load_current_roster_status(year),
+        "team_offense": load_team_offense_strength(year),
     }
 
 
@@ -70,6 +94,7 @@ def build_backtest_projection(
     decay: float = DECAY,
     age_curves: dict = AGE_CURVES,
     age_trend_dampening: float = AGE_TREND_DAMPENING,
+    team_offense_adjustment_strength: float = TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
     verbose: bool = True,
 ) -> pl.DataFrame:
     """
@@ -77,11 +102,12 @@ def build_backtest_projection(
     using only data from before it. Mirrors projection_model.main()'s
     steps (minus ADP proxy, which needs no validation here).
 
-    lookback_seasons/decay/age_curves/age_trend_dampening default to
-    module-level config but can be overridden — used by
-    bin/grid_search.py to test alternate values. verbose=False silences
-    the per-call roster-status drop count, which would otherwise print
-    once per grid point across a search.
+    lookback_seasons/decay/age_curves/age_trend_dampening/
+    team_offense_adjustment_strength default to module-level config but
+    can be overridden — used by bin/grid_search.py to test alternate
+    values. verbose=False silences the per-call roster-status drop
+    count, which would otherwise print once per grid point across a
+    search.
     """
     projections = recency_weighted_projection(season_summary, year, lookback_seasons, decay)
     projections = apply_age_adjustment(projections, year_context["ages"], age_curves, age_trend_dampening)
@@ -89,6 +115,13 @@ def build_backtest_projection(
     rostered_ids = year_context["rostered_ids"]
     if rostered_ids is not None:
         projections = projections.filter(pl.col("player_id").is_in(list(rostered_ids)))
+
+    projections = apply_team_offense_adjustment(
+        projections,
+        year_context["player_teams"],
+        year_context["team_offense"],
+        team_offense_adjustment_strength,
+    )
 
     projections = filter_excluded_roster_status(projections, year_context["roster_status"], verbose=verbose)
     projections = add_position_rank(projections)
