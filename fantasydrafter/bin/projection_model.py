@@ -32,6 +32,9 @@ from lib.config import (
     AGE_CURVES,
     AGE_TREND_DAMPENING,
     TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
+    QB_RUSHING_YARDS_WEIGHT,
+    QB_RUSHING_EMPHASIS_STRENGTH,
+    TARGET_SHARE_ADJUSTMENT_STRENGTH,
     evidence_based_age_adjustment,
     EXCLUDED_ROSTER_STATUSES,
     MIN_RES_STREAK_WEEKS,
@@ -458,6 +461,194 @@ def apply_team_offense_adjustment(
     return projections
 
 
+def _points_weighted_position_average(metric_col: str) -> pl.Expr:
+    """
+    Points-weighted average of metric_col within each position — NOT a
+    simple per-player mean. A simple mean gets dragged down hard by the
+    long tail of career backups every roster carries (2nd/3rd-string
+    players with near-zero relevant usage), which inflated every real
+    starter's ratio far beyond anything reasonable (found empirically:
+    a simple mean put Josh Allen's qb_yards_ratio at 2.8x). Weighting
+    each player's contribution by their own pre-adjustment
+    projected_fantasy_points means irrelevant bench players barely move
+    the baseline, so a real starter's ratio stays sane. Requires
+    "position" and "projected_fantasy_points" columns on the frame this
+    expression is used against.
+    """
+    weight = pl.col("projected_fantasy_points").clip(lower_bound=0)
+    valid_weight = pl.when(pl.col(metric_col).is_not_null()).then(weight).otherwise(0.0)
+    return (
+        (pl.col(metric_col).fill_null(0.0) * valid_weight).sum().over("position")
+        / valid_weight.sum().over("position")
+    )
+
+
+def load_qb_rushing_emphasis(
+    season_summary: pl.DataFrame,
+    current_season: int,
+    lookback_seasons: int = LOOKBACK_SEASONS,
+    decay: float = DECAY,
+    rushing_weight: float = QB_RUSHING_YARDS_WEIGHT,
+) -> pl.DataFrame:
+    """
+    Each QB's recency-weighted "emphasized yards" (passing_yards +
+    rushing_weight x rushing_yards), UNNORMALIZED — see
+    QB_RUSHING_EMPHASIS_STRENGTH in config.py for why. Ratio-to-position-
+    average is computed later in apply_qb_rushing_emphasis, against the
+    currently-relevant player pool rather than this whole historical
+    universe.
+
+    Same seasons-ago / weight formula as recency_weighted_projection,
+    just applied to passing/rushing yards instead of fantasy points.
+    """
+    history = season_summary.filter(
+        (pl.col("season") < current_season) & (pl.col("position") == "QB")
+    )
+    history = history.with_columns(
+        (pl.lit(current_season) - pl.col("season")).alias("seasons_ago")
+    )
+    history = history.filter(pl.col("seasons_ago") <= lookback_seasons)
+    history = history.with_columns(
+        (pl.lit(decay) ** pl.col("seasons_ago")).alias("weight")
+    )
+    history = history.with_columns(
+        (pl.col("passing_yards") + rushing_weight * pl.col("rushing_yards")).alias("emphasized_yards")
+    )
+
+    weighted = history.group_by("player_id").agg(
+        (
+            (pl.col("emphasized_yards") * pl.col("weight")).sum() / pl.col("weight").sum()
+        ).alias("weighted_emphasized_yards")
+    )
+    return weighted
+
+
+def apply_qb_rushing_emphasis(
+    projections: pl.DataFrame,
+    qb_yards: pl.DataFrame,
+    strength: float = QB_RUSHING_EMPHASIS_STRENGTH,
+) -> pl.DataFrame:
+    """
+    Multiplies QB projected_fantasy_points by a factor derived from the
+    QB's own emphasized-yards ratio vs. the (currently-rostered) QB
+    position average — see load_qb_rushing_emphasis and
+    QB_RUSHING_EMPHASIS_STRENGTH in config.py. Non-QB positions and QBs
+    with no rushing/passing history (e.g. a true rookie) get 1.0x.
+    """
+    projections = projections.join(qb_yards, on="player_id", how="left")
+
+    projections = projections.with_columns(
+        _points_weighted_position_average("weighted_emphasized_yards").alias("qb_position_avg_emphasized_yards")
+    )
+    projections = projections.with_columns(
+        (pl.col("weighted_emphasized_yards") / pl.col("qb_position_avg_emphasized_yards")).alias("qb_yards_ratio")
+    )
+
+    projections = projections.with_columns(
+        pl.when(pl.col("position") == "QB")
+        .then(1.0 + strength * (pl.col("qb_yards_ratio").fill_null(1.0) - 1.0))
+        .otherwise(1.0)
+        .alias("qb_rushing_emphasis_factor")
+    )
+
+    projections = projections.with_columns(
+        (pl.col("projected_fantasy_points") * pl.col("qb_rushing_emphasis_factor")).alias(
+            "projected_fantasy_points"
+        )
+    )
+    return projections
+
+
+def load_target_share(
+    season_summary: pl.DataFrame,
+    current_season: int,
+    lookback_seasons: int = LOOKBACK_SEASONS,
+    decay: float = DECAY,
+) -> pl.DataFrame:
+    """
+    Each RB/WR/TE's recency-weighted target share (their share of their
+    primary team's total targets that season), UNNORMALIZED — see
+    TARGET_SHARE_ADJUSTMENT_STRENGTH in config.py for why the ratio-to-
+    position-average is computed later, against the currently-relevant
+    player pool rather than this whole historical universe.
+
+    Pulls team-level total targets via nfl.load_team_stats
+    (summary_level="reg" — regular season only, same reasoning as the
+    postseason-mixing fix in compute_fantasy_points.py) over the same
+    season window, joined on (season, team) using each player-season's
+    primary_team (see compute_fantasy_points.py's build_season_summary).
+    """
+    history = season_summary.filter(
+        (pl.col("season") < current_season)
+        & pl.col("position").is_in(["RB", "WR", "TE"])
+    )
+    history = history.with_columns(
+        (pl.lit(current_season) - pl.col("season")).alias("seasons_ago")
+    )
+    history = history.filter(pl.col("seasons_ago") <= lookback_seasons)
+    history = history.with_columns(
+        (pl.lit(decay) ** pl.col("seasons_ago")).alias("weight")
+    )
+
+    last_completed_season = current_season - 1
+    seasons = list(range(last_completed_season - lookback_seasons + 1, last_completed_season + 1))
+    team_stats = nfl.load_team_stats(seasons=seasons, summary_level="reg")
+    team_targets = team_stats.select(["season", "team", pl.col("targets").alias("team_targets")])
+
+    history = history.join(team_targets, on=["season", "team"], how="left")
+    history = history.with_columns(
+        (pl.col("targets") / pl.col("team_targets")).alias("target_share")
+    )
+    history = history.filter(pl.col("target_share").is_not_null())
+
+    weighted = history.group_by("player_id").agg(
+        (
+            (pl.col("target_share") * pl.col("weight")).sum() / pl.col("weight").sum()
+        ).alias("weighted_target_share")
+    )
+    return weighted
+
+
+def apply_target_share_adjustment(
+    projections: pl.DataFrame,
+    target_share: pl.DataFrame,
+    strength: float = TARGET_SHARE_ADJUSTMENT_STRENGTH,
+) -> pl.DataFrame:
+    """
+    Multiplies RB/WR/TE projected_fantasy_points by a factor derived
+    from the player's own target-share ratio vs. the (currently-
+    rostered) position average — see load_target_share and
+    TARGET_SHARE_ADJUSTMENT_STRENGTH in config.py. Refines
+    apply_team_offense_adjustment (which boosts every pass-catcher on a
+    team identically) with each player's own share of that team's
+    passing volume. QB and players with no target history (e.g. a true
+    rookie, or a pure between-the-tackles back with ~0 targets) get
+    1.0x, not an exclusion.
+    """
+    projections = projections.join(target_share, on="player_id", how="left")
+
+    projections = projections.with_columns(
+        _points_weighted_position_average("weighted_target_share").alias("position_avg_target_share")
+    )
+    projections = projections.with_columns(
+        (pl.col("weighted_target_share") / pl.col("position_avg_target_share")).alias("target_share_ratio")
+    )
+
+    projections = projections.with_columns(
+        pl.when(pl.col("position").is_in(["RB", "WR", "TE"]))
+        .then(1.0 + strength * (pl.col("target_share_ratio").fill_null(1.0) - 1.0))
+        .otherwise(1.0)
+        .alias("target_share_adjustment_factor")
+    )
+
+    projections = projections.with_columns(
+        (pl.col("projected_fantasy_points") * pl.col("target_share_adjustment_factor")).alias(
+            "projected_fantasy_points"
+        )
+    )
+    return projections
+
+
 def add_position_rank(projections: pl.DataFrame) -> pl.DataFrame:
     return projections.with_columns(
         pl.col("projected_fantasy_points")
@@ -550,6 +741,18 @@ def main(force_recompute: bool = False):
         print("Applying team offense adjustment...")
         projections = apply_team_offense_adjustment(projections, player_teams, team_offense)
 
+        print("Loading QB rushing-yards emphasis...")
+        qb_yards = load_qb_rushing_emphasis(season_summary, current_season)
+
+        print("Applying QB rushing emphasis...")
+        projections = apply_qb_rushing_emphasis(projections, qb_yards)
+
+        print("Loading RB/WR/TE target share...")
+        target_share = load_target_share(season_summary, current_season)
+
+        print("Applying target share adjustment...")
+        projections = apply_target_share_adjustment(projections, target_share)
+
         print("Loading current roster status (active/reserve)...")
         roster_status = load_current_roster_status(current_season)
 
@@ -581,6 +784,8 @@ def main(force_recompute: bool = False):
                         "age_adjustment_factor",
                         "team",
                         "team_offense_adjustment_factor",
+                        "qb_rushing_emphasis_factor",
+                        "target_share_adjustment_factor",
                         "roster_status",
                         "position_rank",
                         "adp_proxy_rank",

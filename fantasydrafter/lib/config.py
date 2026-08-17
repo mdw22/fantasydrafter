@@ -220,6 +220,70 @@ TEAM_OFFENSE_ADJUSTMENT_STRENGTH = 0.3
 
 
 # ---------------------------------------------------------------------------
+# QB rushing emphasis
+# ---------------------------------------------------------------------------
+#
+# QBs get boosted/discounted by their own recency-weighted "emphasized
+# yards" (passing_yards + QB_RUSHING_YARDS_WEIGHT x rushing_yards)
+# relative to the QB position average. QB rushing production (yardage,
+# and the much easier goal-line rushing TDs it creates) is what actually
+# separates a true fantasy QB1 from a similarly-talented pure pocket
+# passer — that gap wasn't showing up strongly enough in
+# projected_fantasy_points alone to keep otherwise very different QBs
+# (e.g. Jalen Hurts/Lamar Jackson vs. Jared Goff/Matthew Stafford) out
+# of the same tier, even though rushing yards already count toward a
+# QB's historical fantasy points the same as anyone else's (0.1/yard) —
+# this is a deliberate EXTRA emphasis on top of that, not just
+# re-counting the same points twice.
+#
+# QB_RUSHING_YARDS_WEIGHT: how many "passing-yard-equivalents" one
+# rushing yard counts as for this signal only (does not touch actual
+# scoring — see SCORING in compute_fantasy_points.py for real league
+# rules). QB_RUSHING_EMPHASIS_STRENGTH: 0 = no effect, 1 = full
+# pass-through of the resulting ratio.
+#
+# Confirmed by bin/grid_search.py (Stage 5, searched jointly): weight
+# moved from an initial 2.5 guess to 3.0, strength confirmed at the
+# initial 0.3 guess. This landed on a genuine interior optimum, not a
+# search-grid-boundary artifact (4.0 was tested and lost to 3.0) — a
+# more confident finding than the AGE_CURVES stage, similar confidence
+# to TEAM_OFFENSE_ADJUSTMENT_STRENGTH.
+QB_RUSHING_YARDS_WEIGHT = 3.0
+QB_RUSHING_EMPHASIS_STRENGTH = 0.3
+
+
+# ---------------------------------------------------------------------------
+# Target share adjustment (RB/WR/TE)
+# ---------------------------------------------------------------------------
+#
+# RB/WR/TE get boosted/discounted by their own recency-weighted target
+# share (their share of their team's total targets that season)
+# relative to the position average. TEAM_OFFENSE_ADJUSTMENT_STRENGTH
+# above applies the same team-level boost to every pass-catcher on a
+# team regardless of role — this refines that with each player's own
+# share of the passing game, which is what actually separates a true
+# WR1 from a same-team WR3, or a receiving back from a between-the-
+# tackles committee runner.
+#
+# Ratio is computed as a POINTS-WEIGHTED average within the currently-
+# rostered player pool, not a simple per-player mean — a simple mean
+# (even scoped to currently-rostered players) is still dominated by the
+# long tail of career backups/committee pieces every roster carries,
+# which inflated every real starter's ratio far beyond reasonable (found
+# empirically: a simple mean put Bijan Robinson's target_share_ratio at
+# 2.2x). Weighting each player's contribution to the average by their
+# own (pre-adjustment) projected_fantasy_points fixes this — see
+# _points_weighted_position_average() in projection_model.py, shared
+# with the QB rushing emphasis adjustment above for the same reason.
+#
+# 0 = no effect, 1 = full pass-through. 0.3 confirmed by
+# bin/grid_search.py (Stage 6) — landed on a genuine interior optimum
+# (1.5, the highest tested value, was NOT the winner), matching the
+# initial guess.
+TARGET_SHARE_ADJUSTMENT_STRENGTH = 0.3
+
+
+# ---------------------------------------------------------------------------
 # Roster status exclusion
 # ---------------------------------------------------------------------------
 #
