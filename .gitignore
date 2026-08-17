@@ -1,10 +1,10 @@
 # Generated pipeline output — regenerate via `python -m fantasydrafter`
 # (or the individual bin/ scripts). Not committed since it's derived data
 # that changes every time the pipeline is rerun.
-/cheat_sheet.csv
-/projections.csv
-/fantasy_points_by_season.csv
 fantasydrafter/lib/*.csv
+.venv
+package-lock.json
+PROJECTNOTES.md
 
 # Python bytecode cache
 __pycache__/
