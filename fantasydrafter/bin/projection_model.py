@@ -29,6 +29,8 @@ from lib.config import (
     LOOKBACK_SEASONS,
     DECAY,
     MAX_GAMES,
+    AGE_CURVES,
+    AGE_TREND_DAMPENING,
     evidence_based_age_adjustment,
     EXCLUDED_ROSTER_STATUSES,
     MIN_RES_STREAK_WEEKS,
@@ -118,14 +120,23 @@ def load_currently_rostered_ids(current_season: int) -> set | None:
     return set(rosters[id_col].drop_nulls().to_list())
 
 
-def recency_weighted_projection(season_summary: pl.DataFrame, current_season: int) -> pl.DataFrame:
+def recency_weighted_projection(
+    season_summary: pl.DataFrame,
+    current_season: int,
+    lookback_seasons: int = LOOKBACK_SEASONS,
+    decay: float = DECAY,
+) -> pl.DataFrame:
     """
-    For each player, take their last LOOKBACK_SEASONS seasons (seasons
+    For each player, take their last lookback_seasons seasons (seasons
     strictly before current_season), weight per-game fantasy points by
     recency (exponential decay), and estimate:
       - projected_ppg: weighted-average per-game fantasy points
       - projected_games: weighted-average games played, capped at MAX_GAMES
       - projected_fantasy_points: projected_ppg * projected_games
+
+    lookback_seasons/decay default to module-level config but can be
+    overridden — used by bin/grid_search.py to test alternate values
+    without mutating global config state.
     """
     history = season_summary.filter(pl.col("season") < current_season)
 
@@ -133,9 +144,9 @@ def recency_weighted_projection(season_summary: pl.DataFrame, current_season: in
     history = history.with_columns(
         (pl.lit(current_season) - pl.col("season")).alias("seasons_ago")
     )
-    history = history.filter(pl.col("seasons_ago") <= LOOKBACK_SEASONS)
+    history = history.filter(pl.col("seasons_ago") <= lookback_seasons)
     history = history.with_columns(
-        (pl.lit(DECAY) ** pl.col("seasons_ago")).alias("weight")
+        (pl.lit(decay) ** pl.col("seasons_ago")).alias("weight")
     )
 
     weighted = (
@@ -176,11 +187,22 @@ def recency_weighted_projection(season_summary: pl.DataFrame, current_season: in
     return weighted
 
 
-def apply_age_adjustment(projections: pl.DataFrame, ages: pl.DataFrame) -> pl.DataFrame:
+def apply_age_adjustment(
+    projections: pl.DataFrame,
+    ages: pl.DataFrame,
+    age_curves: dict = AGE_CURVES,
+    age_trend_dampening: float = AGE_TREND_DAMPENING,
+) -> pl.DataFrame:
+    """
+    age_curves/age_trend_dampening default to module-level config but can
+    be overridden — used by bin/grid_search.py.
+    """
     projections = projections.join(ages, on="player_id", how="left")
 
     factors = [
-        evidence_based_age_adjustment(pos, age, recent_ppg, peak_ppg)
+        evidence_based_age_adjustment(
+            pos, age, recent_ppg, peak_ppg, age_curves, age_trend_dampening
+        )
         for pos, age, recent_ppg, peak_ppg in zip(
             projections["position"],
             projections["age_at_season"],
@@ -285,7 +307,7 @@ def load_current_roster_status(current_season: int) -> pl.DataFrame:
 
 
 def filter_excluded_roster_status(
-    projections: pl.DataFrame, roster_status: pl.DataFrame
+    projections: pl.DataFrame, roster_status: pl.DataFrame, verbose: bool = True
 ) -> pl.DataFrame:
     """
     Drop players whose most recent roster status is in
@@ -310,7 +332,7 @@ def filter_excluded_roster_status(
     ).fill_null(False)
     projections = projections.filter(~excluded_mask)
     dropped = before_count - projections.height
-    if dropped:
+    if dropped and verbose:
         print(f"  Dropped {dropped} players with {MIN_RES_STREAK_WEEKS}+ consecutive weeks on an excluded roster status ({sorted(EXCLUDED_ROSTER_STATUSES)}).")
     return projections
 
