@@ -31,6 +31,7 @@ from lib.config import (
     MAX_GAMES,
     AGE_CURVES,
     AGE_TREND_DAMPENING,
+    TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
     evidence_based_age_adjustment,
     EXCLUDED_ROSTER_STATUSES,
     MIN_RES_STREAK_WEEKS,
@@ -79,15 +80,22 @@ def load_player_ages(current_season: int) -> pl.DataFrame:
     return players.select(["player_id", "age_at_season"])
 
 
-def load_currently_rostered_ids(current_season: int) -> set | None:
+# load_rosters() and load_team_stats() disagree on Arizona's abbreviation
+# (AZ vs ARI) — found empirically (see load_player_teams), not documented
+# anywhere. Normalize to team_stats' convention ("ARI") so the two join
+# cleanly; without this, every Arizona player silently got no team-offense
+# signal at all (fell back to the null-safe 1.0x default with no error).
+TEAM_CODE_ALIASES = {"AZ": "ARI"}
+
+
+def load_player_teams(current_season: int) -> pl.DataFrame | None:
     """
-    Pull the set of player IDs currently on an NFL team roster for
-    current_season. Used to filter the projection pool down to players
-    who are actually draftable — the historical stats pull has no
-    awareness of retirement, free agency, or being out of the league, so
-    without this filter the cheat sheet includes players who aren't
-    rosterable at all (e.g. an unsigned free agent, or someone who
-    retired years ago but still has recent-enough stats to rank).
+    Pulls each player's current team for current_season from
+    load_rosters() (season-level roster snapshot). Backs both
+    load_currently_rostered_ids (the draftable-player filter) and
+    apply_team_offense_adjustment (joining team-level context onto
+    individual player rows) — team codes normalized via
+    TEAM_CODE_ALIASES so the latter join doesn't silently miss players.
 
     NOTE: uses load_rosters() (season-level), not load_rosters_weekly()
     (which we already use elsewhere for in-season active/reserve status).
@@ -103,10 +111,6 @@ def load_currently_rostered_ids(current_season: int) -> set | None:
     rosters = nfl.load_rosters(seasons=[current_season])
 
     if rosters.height == 0:
-        print(
-            f"Warning: no roster data found for {current_season} — "
-            "skipping the currently-rostered filter entirely."
-        )
         return None
 
     id_candidates = [c for c in rosters.columns if "gsis" in c.lower()]
@@ -117,7 +121,36 @@ def load_currently_rostered_ids(current_season: int) -> set | None:
         )
     id_col = id_candidates[0]
 
-    return set(rosters[id_col].drop_nulls().to_list())
+    return (
+        rosters.select([id_col, "team"])
+        .drop_nulls()
+        .unique(subset=[id_col], keep="first")
+        .rename({id_col: "player_id"})
+        .with_columns(pl.col("team").replace(TEAM_CODE_ALIASES))
+    )
+
+
+def load_currently_rostered_ids(current_season: int) -> set | None:
+    """
+    Pull the set of player IDs currently on an NFL team roster for
+    current_season, via load_player_teams(). Used to filter the
+    projection pool down to players who are actually draftable — the
+    historical stats pull has no awareness of retirement, free agency,
+    or being out of the league, so without this filter the cheat sheet
+    includes players who aren't rosterable at all (e.g. an unsigned free
+    agent, or someone who retired years ago but still has recent-enough
+    stats to rank).
+    """
+    player_teams = load_player_teams(current_season)
+
+    if player_teams is None:
+        print(
+            f"Warning: no roster data found for {current_season} — "
+            "skipping the currently-rostered filter entirely."
+        )
+        return None
+
+    return set(player_teams["player_id"].to_list())
 
 
 def recency_weighted_projection(
@@ -337,6 +370,94 @@ def filter_excluded_roster_status(
     return projections
 
 
+def load_team_offense_strength(
+    current_season: int,
+    lookback_seasons: int = LOOKBACK_SEASONS,
+    decay: float = DECAY,
+) -> pl.DataFrame:
+    """
+    Each team's recency-weighted offensive yards-per-game (passing +
+    rushing), relative to the league average over the same window, as of
+    current_season. Mirrors recency_weighted_projection's weighting
+    exactly (same seasons-ago / DECAY-power formula), just applied to
+    team-level stats instead of player-level — same LOOKBACK_SEASONS/
+    DECAY by default so "how much recent history matters" stays
+    consistent between the two, though callers can override (used by
+    bin/grid_search.py).
+
+    Pulls seasons strictly before current_season (last_completed_season
+    down through the lookback window) — mirrors compute_fantasy_points.py's
+    CURRENT_SEASON_OVERRIDE handling: current_season may be the season
+    we're drafting FOR (unplayed), so requesting it directly would ask
+    nflreadpy for a season with no games yet.
+
+    Uses summary_level="reg" directly (regular season only) rather than
+    filtering post-hoc — same reasoning as the postseason-mixing fix in
+    compute_fantasy_points.py.
+    """
+    last_completed_season = current_season - 1
+    seasons = list(range(last_completed_season - lookback_seasons + 1, last_completed_season + 1))
+
+    team_stats = nfl.load_team_stats(seasons=seasons, summary_level="reg")
+    team_stats = team_stats.with_columns(
+        ((pl.col("passing_yards") + pl.col("rushing_yards")) / pl.col("games")).alias("yards_per_game")
+    )
+
+    team_stats = team_stats.with_columns(
+        (pl.lit(current_season) - pl.col("season")).alias("seasons_ago")
+    )
+    team_stats = team_stats.with_columns(
+        (pl.lit(decay) ** pl.col("seasons_ago")).alias("weight")
+    )
+
+    weighted = team_stats.group_by("team").agg(
+        (
+            (pl.col("yards_per_game") * pl.col("weight")).sum() / pl.col("weight").sum()
+        ).alias("team_yards_per_game")
+    )
+
+    league_avg = weighted["team_yards_per_game"].mean()
+    weighted = weighted.with_columns(
+        (pl.col("team_yards_per_game") / league_avg).alias("team_yards_ratio")
+    )
+    return weighted.select(["team", "team_yards_ratio"])
+
+
+def apply_team_offense_adjustment(
+    projections: pl.DataFrame,
+    player_teams: pl.DataFrame | None,
+    team_offense: pl.DataFrame,
+    team_offense_adjustment_strength: float = TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
+) -> pl.DataFrame:
+    """
+    Multiplies projected_fantasy_points by a factor derived from the
+    player's current team's offensive yards-per-game relative to league
+    average (see load_team_offense_strength). strength=0 leaves everyone
+    at 1.0x; strength=1 fully passes through the team's ratio. Players
+    with no team match (no roster data available) get 1.0x — no team
+    signal, no adjustment either way, not an exclusion.
+    """
+    if player_teams is None:
+        return projections.with_columns(pl.lit(1.0).alias("team_offense_adjustment_factor"))
+
+    projections = projections.join(player_teams, on="player_id", how="left")
+    projections = projections.join(team_offense, on="team", how="left")
+
+    projections = projections.with_columns(
+        (
+            1.0
+            + team_offense_adjustment_strength * (pl.col("team_yards_ratio").fill_null(1.0) - 1.0)
+        ).alias("team_offense_adjustment_factor")
+    )
+
+    projections = projections.with_columns(
+        (pl.col("projected_fantasy_points") * pl.col("team_offense_adjustment_factor")).alias(
+            "projected_fantasy_points"
+        )
+    )
+    return projections
+
+
 def add_position_rank(projections: pl.DataFrame) -> pl.DataFrame:
     return projections.with_columns(
         pl.col("projected_fantasy_points")
@@ -408,15 +529,26 @@ def main(force_recompute: bool = False):
         print(f"Building recency-weighted projections ({LOOKBACK_SEASONS}-season lookback, decay={DECAY})...")
         projections = recency_weighted_projection(season_summary, current_season)
 
+        print("Loading current team rosters...")
+        player_teams = load_player_teams(current_season)
+
         print("Filtering to currently-rostered players (excludes free agents/retirees)...")
-        rostered_ids = load_currently_rostered_ids(current_season)
-        if rostered_ids is not None:
+        if player_teams is None:
+            print(f"Warning: no roster data found for {current_season} — skipping the currently-rostered filter entirely.")
+        else:
+            rostered_ids = set(player_teams["player_id"].to_list())
             before_count = projections.height
             projections = projections.filter(pl.col("player_id").is_in(list(rostered_ids)))
             print(f"  Kept {projections.height} of {before_count} players (dropped {before_count - projections.height} not on a current roster).")
 
         print("Applying position-specific age adjustment (evidence-based)...")
         projections = apply_age_adjustment(projections, ages)
+
+        print("Loading team offensive strength (yards/game vs. league average)...")
+        team_offense = load_team_offense_strength(current_season)
+
+        print("Applying team offense adjustment...")
+        projections = apply_team_offense_adjustment(projections, player_teams, team_offense)
 
         print("Loading current roster status (active/reserve)...")
         roster_status = load_current_roster_status(current_season)
@@ -447,6 +579,8 @@ def main(force_recompute: bool = False):
                         "player_display_name",
                         "projected_fantasy_points",
                         "age_adjustment_factor",
+                        "team",
+                        "team_offense_adjustment_factor",
                         "roster_status",
                         "position_rank",
                         "adp_proxy_rank",

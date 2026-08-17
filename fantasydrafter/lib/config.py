@@ -102,6 +102,21 @@ MAX_GAMES = 17
 # Worth re-running the grid search each future season as more data
 # accumulates — this is a small sample (5 draft classes) to be pulling
 # aging curves out of.
+#
+# UPDATE: re-ran the search after fixing a real bug in it (Stage 3 was
+# centering its search window on whatever's currently in this file, so
+# rerunning it after applying a result let the window "walk" further
+# every time — RB drifted 27->23->19 over two runs with no sign of
+# converging, a search-methodology artifact, not a real signal). Fixed
+# to a wide, FIXED, absolute grid (21-33) not centered on this file's
+# current values. Result: it STILL hugs the edge of that range for
+# RB/TE (found 21, the grid's minimum) even with the walking bug fixed —
+# a second, independent sign of overfitting a small sample, not a
+# genuine converged optimum. Not applying that result. Leaving these
+# values as previously applied (above) rather than reverting to the
+# original domain-knowledge numbers either, absent a clearer signal
+# either way — but treat this whole knob as low-confidence until there's
+# more backtest data to work with.
 AGE_CURVES = {
     "RB": (23, 0.06),
     "WR": (25, 0.06),
@@ -172,8 +187,38 @@ def evidence_based_age_adjustment(
     raw_discount = 1.0 - base_factor
     dampened_discount = raw_discount * (1.0 - age_trend_dampening * performance_ratio)
     return 1.0 - dampened_discount
- 
- 
+
+
+# ---------------------------------------------------------------------------
+# Team offense adjustment
+# ---------------------------------------------------------------------------
+#
+# Players on a higher-volume offense (more total yards/game — passing +
+# rushing) get a boost; players on a lower-volume offense get a
+# discount. Uses the SAME recency-weighted lookback as the player-level
+# projection (LOOKBACK_SEASONS/DECAY by default), applied to the team
+# the player is CURRENTLY rostered with — this is a context adjustment
+# layered on top of the player's own history, not a per-historical-
+# season correction (a player's own history stays tied to the team(s)
+# they actually played for at the time).
+#
+# 0 = no effect (factor always 1.0); 1 = full pass-through of the team's
+# yards-per-game ratio vs. league average over the same window.
+#
+# 0.3 confirmed by bin/grid_search.py (Stage 4) — landed on the same
+# value across two separate runs against a fixed, well-bounded search
+# grid (0.0-1.5), with a small but real accuracy improvement (mean rank
+# correlation +0.0016-0.0021 depending on run). A more confident finding
+# than the AGE_CURVES stage — see that comment above for why those
+# results weren't trusted.
+#
+# Worth trying next: splitting by pass/rush yards per position (WR/TE/QB
+# scale with passing volume, RB with rushing volume) instead of total
+# yards for everyone — this v1 uses total yards uniformly, per the
+# initial ask.
+TEAM_OFFENSE_ADJUSTMENT_STRENGTH = 0.3
+
+
 # ---------------------------------------------------------------------------
 # Roster status exclusion
 # ---------------------------------------------------------------------------
