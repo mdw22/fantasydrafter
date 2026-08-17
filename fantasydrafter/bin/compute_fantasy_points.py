@@ -107,8 +107,27 @@ def build_season_summary(weekly: pl.DataFrame) -> pl.DataFrame:
     Aggregate weekly fantasy points to season totals + per-game averages,
     filtered to skill positions. This is the shape the projection model
     (next step) will consume.
+
+    Also retains season totals for targets/rushing_yards/passing_yards
+    (raw counting stats, not points) and each player's primary team for
+    the season — needed downstream for target-share (RB/WR/TE) and
+    rushing-yards-emphasis (QB) adjustments, which need more than just
+    the points total. games_played/fantasy_points_total already
+    correctly sum across a mid-season trade (grouped by player+season
+    only, not team); primary_team picks whichever team they played the
+    most games for that season as an approximation for a traded player
+    — not exact for a genuine 50/50 split, but that's a rare edge case.
     """
     skill = weekly.filter(pl.col("position").is_in(SKILL_POSITIONS))
+
+    primary_team = (
+        skill.group_by(["player_id", "season", "team"])
+        .agg(pl.len().alias("games_with_team"))
+        .sort("games_with_team", descending=True)
+        .group_by(["player_id", "season"], maintain_order=True)
+        .first()
+        .select(["player_id", "season", "team"])
+    )
 
     season_summary = (
         skill.group_by(["player_id", "player_display_name", "position", "season"])
@@ -117,8 +136,12 @@ def build_season_summary(weekly: pl.DataFrame) -> pl.DataFrame:
                 pl.len().alias("games_played"),
                 pl.col("fantasy_points").sum().alias("fantasy_points_total"),
                 pl.col("fantasy_points").mean().alias("fantasy_points_per_game"),
+                pl.col("targets").fill_null(0).sum().alias("targets"),
+                pl.col("rushing_yards").fill_null(0).sum().alias("rushing_yards"),
+                pl.col("passing_yards").fill_null(0).sum().alias("passing_yards"),
             ]
         )
+        .join(primary_team, on=["player_id", "season"], how="left")
         .sort(["season", "fantasy_points_total"], descending=[True, True])
     )
     return season_summary
