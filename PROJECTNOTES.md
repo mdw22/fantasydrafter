@@ -90,7 +90,55 @@ applying anything):
   accumulates, and watching for other "still-productive older player"
   cases getting discounted too aggressively.
 
+**Stage 3 (AGE_CURVES) methodology bug found on the second tuning pass,
+now fixed — but the underlying tuning wasn't re-applied.** The search
+was centering its grid on whatever's currently in config.py, so rerunning
+it after applying a result let the window walk further every time (RB
+peak_age drifted 27→23→19 across two runs, no sign of converging) — a
+search-methodology artifact, not a real signal. Fixed to a wide, FIXED,
+absolute grid (peak_age 21-33) that doesn't depend on the file's current
+state. Even fixed, the result still hugs the edge of that range for
+RB/TE (found 21, the grid's minimum) — a second, independent sign of
+overfitting the small 5-year sample rather than a genuine converged
+optimum. Left AGE_CURVES at the previously-applied values rather than
+pushing further or reverting — **treat this whole knob as low-confidence
+until there's more backtest data**, and don't trust a future
+`grid_search.py` Stage 3 run just because it's "consistent" across a
+couple of windows — as this episode showed, a methodology bug can look
+consistent too.
+
+## Team offense adjustment
+
+Players on a higher-volume offense (more total yards/game — passing +
+rushing) get a projection boost; players on a lower-volume offense get a
+discount. `load_team_offense_strength()` in `projection_model.py` pulls
+`nfl.load_team_stats(summary_level="reg")` (regular season only, same
+reasoning as the postseason-mixing fix below), computes each team's
+recency-weighted yards/game (same DECAY/LOOKBACK_SEASONS shape as the
+player-level projection, but NOT tied to the same override — a
+grid-search sweep of the player-level DECAY doesn't also move the
+team-level signal), and expresses it as a ratio to league average.
+`TEAM_OFFENSE_ADJUSTMENT_STRENGTH` (config.py) controls how much this
+ratio actually moves a player's projection (0 = no effect, 1 = full
+pass-through) — confirmed at **0.3** via `bin/grid_search.py` Stage 4,
+consistent across two separate runs against a fixed grid, small but real
+accuracy improvement.
+
+v1 uses TOTAL yards uniformly for every position — the initial ask
+didn't specify a split. Worth trying next: passing yards for WR/TE/QB,
+rushing yards for RB, since a run-first team's total yards can look fine
+while still being a bad environment for its receiving corps specifically.
+
 ## Known gotchas already hit (don't re-debug these)
+
+- **`load_rosters()` and `load_team_stats()` disagree on Arizona's team
+  code** (`AZ` vs `ARI`) — found empirically joining the two together
+  (every Arizona player silently got no team-offense signal, no error,
+  just fell back to the null-safe 1.0x default). Not documented anywhere
+  in nflverse's own dictionaries. `TEAM_CODE_ALIASES` in
+  `projection_model.py` normalizes it. Only mismatch found across all 32
+  teams as of this check — but if a future nflreadpy update introduces
+  another one, it'll fail the same silent way, not an error.
 
 - **nflreadpy column names don't always match the docs.** Already found:
   `passing_interceptions` not `interceptions`; `load_rosters()` /
