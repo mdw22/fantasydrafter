@@ -1,0 +1,7 @@
+node_modules
+dist
+.DS_Store
+
+# Generated from the Python pipeline's cheat_sheet.csv — regenerate via
+# `npm run refresh-data` or scripts/csv_to_json.py. See README.md.
+public/data/*.json
