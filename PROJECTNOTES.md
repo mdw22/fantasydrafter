@@ -31,6 +31,65 @@ with `--force`. **Easy to forget** — if you change config.py or a script's
 logic, you need `--force` on that script AND every script downstream of
 it, or you'll be looking at stale numbers.
 
+Convenience wrappers at the repo root: `./refresh_cheat_sheet.sh` (or
+`npm run refresh-data` from `fantasy-draft-app/`) runs the full pipeline
++ regenerates the JSON in one shot. `./run_backtest.sh` runs the model
+accuracy backtest (see below).
+
+## Backtesting
+
+`fantasydrafter/bin/backtest.py` (run via `./run_backtest.sh` or
+`python -m bin.backtest` from `fantasydrafter/`) validates the model's
+actual predictive accuracy: for each past season, it rebuilds what the
+model would have projected using only data available before that season
+— reusing projection_model.py's real functions directly, not a separate
+reimplementation, so results always reflect whatever the pipeline
+currently does — then compares against what players actually scored.
+Reports point correlation, rank correlation, MAE/RMSE, and top-12 hit
+rate, by position and year, and writes `lib/backtest_results.csv`.
+
+Baseline results as of this model (last 5 completed seasons, 2021-2025):
+point correlation ~0.75-0.80, rank correlation ~0.70-0.79, top-12 hit
+rate ~40-65% depending on position/year. 2023 was a noticeably worse
+year across QB/RB (correlation dropped to ~0.64/0.66) — not yet
+investigated, worth digging into if revisiting the model.
+
+Does not backtest VBD/tiers — those are draft-strategy overlays with no
+ground truth to check against, not predictions in themselves.
+
+## Tuning (grid search)
+
+`fantasydrafter/bin/grid_search.py` (run via `python -m bin.grid_search`
+from `fantasydrafter/`) searches DECAY, AGE_TREND_DAMPENING, and
+per-position AGE_CURVES against backtest.py's accuracy, staged (not one
+full joint grid — combinatorially infeasible): LOOKBACK_SEASONS x DECAY
+jointly first, then AGE_TREND_DAMPENING, then each position's AGE_CURVES
+independently. Deliberately does NOT search LOOKBACK_SEASONS output,
+TIER_GAP_PCT_THRESHOLD/VBD knobs, or EXCLUDED_ROSTER_STATUSES/
+MIN_RES_STREAK_WEEKS — no ground truth for the first two, and the last
+would just reward excluding hard-to-predict players rather than genuine
+accuracy.
+
+**Applied from the first tuning pass** (searched against 2021-2025,
+cross-checked against 2021-2023 and 2024-2025 alone for stability before
+applying anything):
+- `DECAY`: 0.65 → 0.4. The single most consistent finding — won in
+  every window tested. High confidence this is real, not noise.
+- `LOOKBACK_SEASONS`: left at 5 — the search result bounced between 3-5
+  depending on the window (noisy), and matters less anyway once DECAY
+  is already this low.
+- `AGE_TREND_DAMPENING`: 0.5 → 0.1, and `AGE_CURVES` peak ages dropped
+  notably (RB 27→23, WR/TE 29→25, QB unchanged) — consistent direction
+  across every window, but in real tension with the deliberate
+  Saquon-Barkley/Derrick-Henry fix that 0.5 existed for. Concretely:
+  Barkley's age_adjustment_factor went 0.896 → 0.632, Henry's
+  0.783 → 0.460, under the new config. Applied anyway — overall backtest
+  accuracy improved (rank correlation 0.788 → 0.800, MAE 41.3 → 39.6) —
+  but this is a real, deliberate tradeoff, not a free win. Worth
+  re-running the grid search each future season as more data
+  accumulates, and watching for other "still-productive older player"
+  cases getting discounted too aggressively.
+
 ## Known gotchas already hit (don't re-debug these)
 
 - **nflreadpy column names don't always match the docs.** Already found:
