@@ -64,10 +64,17 @@ CURRENT_SEASON_OVERRIDE = 2026
  
 # How many of a player's most recent seasons to weight into the projection.
 LOOKBACK_SEASONS = 5
- 
+
 # Exponential decay applied per season of recency. weight = DECAY ** n,
 # where n=0 is the most recent season. Lower = more weight on recent data.
-DECAY = 0.65
+#
+# Was 0.65 — bin/grid_search.py found 0.4 consistently outperforms it
+# (mean rank correlation vs. actual season results) across every backtest
+# window tested (2021-2023, 2021-2025, 2024-2025 alone), and it was the
+# single most stable finding of the whole search — worth re-verifying via
+# ./run_backtest.sh + ./run_backtest.sh with grid_search each future
+# season to confirm it still holds as more seasons of data accumulate.
+DECAY = 0.4
  
 # Max games in a modern NFL regular season (used to cap projected games).
 MAX_GAMES = 17
@@ -81,20 +88,39 @@ MAX_GAMES = 17
 # penalized — their limited sample already reflects less-established roles).
 # This is intentionally simple; a real aging curve is nonlinear, but this
 # gives a directionally correct adjustment without overfitting to a
-# historical-only sample. These are starting assumptions, not fitted to
-# data — treat as tunable knobs.
+# historical-only sample.
+#
+# Originally hand-picked from general NFL aging-curve knowledge (RB
+# 27/0.06, WR 29/0.04, TE 29/0.03, QB 32/0.02 — RBs decline earliest and
+# steepest, QBs latest and slowest). bin/grid_search.py backtested
+# against 2021-2025 actual results and found notably lower peak ages
+# outperform for RB/WR/TE, consistently across every window tested
+# (2021-2023, 2021-2025, 2024-2025 alone) — the consistency is why
+# these were adopted despite being a bigger jump from the original
+# domain-knowledge assumption than expected. QB's curve barely moved
+# (its own backtest signal was weak either way) so it was left as-is.
+# Worth re-running the grid search each future season as more data
+# accumulates — this is a small sample (5 draft classes) to be pulling
+# aging curves out of.
 AGE_CURVES = {
-    "RB": (27, 0.06),   # RBs decline earliest and steepest
-    "WR": (29, 0.04),
-    "TE": (29, 0.03),
-    "QB": (32, 0.02),   # QBs decline latest and slowest
+    "RB": (23, 0.06),
+    "WR": (25, 0.06),
+    "TE": (25, 0.06),
+    "QB": (32, 0.02),
 }
  
  
-def age_adjustment_factor(position: str, age: float | None) -> float:
-    if age is None or position not in AGE_CURVES:
+def age_adjustment_factor(
+    position: str, age: float | None, age_curves: dict = AGE_CURVES
+) -> float:
+    """
+    age_curves defaults to the module-level AGE_CURVES but can be
+    overridden — used by bin/grid_search.py to test alternate curves
+    without mutating global config state.
+    """
+    if age is None or position not in age_curves:
         return 1.0
-    peak_age, decline_per_year = AGE_CURVES[position]
+    peak_age, decline_per_year = age_curves[position]
     if age <= peak_age:
         return 1.0
     years_past_peak = age - peak_age
@@ -108,7 +134,16 @@ def age_adjustment_factor(position: str, age: float | None) -> float:
 # Addresses cases like Derrick Henry: age alone says "decline", but if
 # their own recent performance doesn't show it, the discount shouldn't be
 # as severe as for someone who has visibly already declined.
-AGE_TREND_DAMPENING = 0.5
+#
+# Was 0.5 (picked to fix that specific case). bin/grid_search.py
+# backtested against 2021-2025 actual results and found ~0.1 consistently
+# scores better — i.e. the age curve itself (now lower peak ages, see
+# AGE_CURVES) should mostly do the work, with less further dampening on
+# top. This trades away some of the safety margin the original 0.5 gave
+# specific cases like Henry/Barkley in exchange for better average
+# accuracy — worth watching for regressions on similar "still performing
+# despite age" players, and re-running the grid search each future season.
+AGE_TREND_DAMPENING = 0.1
  
  
 def evidence_based_age_adjustment(
@@ -116,6 +151,8 @@ def evidence_based_age_adjustment(
     age: float | None,
     recent_ppg: float | None,
     peak_ppg_in_lookback: float | None,
+    age_curves: dict = AGE_CURVES,
+    age_trend_dampening: float = AGE_TREND_DAMPENING,
 ) -> float:
     """
     Like age_adjustment_factor, but scales the discount by how much the
@@ -123,14 +160,17 @@ def evidence_based_age_adjustment(
     season's per-game rate is still near their own peak (within the
     lookback window) gets the discount dampened; one who has clearly
     already fallen off gets the full age-curve discount.
+
+    age_curves/age_trend_dampening default to module-level config but can
+    be overridden — used by bin/grid_search.py.
     """
-    base_factor = age_adjustment_factor(position, age)
+    base_factor = age_adjustment_factor(position, age, age_curves)
     if base_factor >= 1.0 or not peak_ppg_in_lookback or not recent_ppg:
         return base_factor
- 
+
     performance_ratio = min(recent_ppg / peak_ppg_in_lookback, 1.0)
     raw_discount = 1.0 - base_factor
-    dampened_discount = raw_discount * (1.0 - AGE_TREND_DAMPENING * performance_ratio)
+    dampened_discount = raw_discount * (1.0 - age_trend_dampening * performance_ratio)
     return 1.0 - dampened_discount
  
  
