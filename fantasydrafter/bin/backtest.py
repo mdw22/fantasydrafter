@@ -43,6 +43,10 @@ from bin.projection_model import (
     filter_excluded_roster_status,
     load_team_offense_strength,
     apply_team_offense_adjustment,
+    load_qb_rushing_emphasis,
+    apply_qb_rushing_emphasis,
+    load_target_share,
+    apply_target_share_adjustment,
     add_position_rank,
 )
 from lib.config import (
@@ -52,28 +56,36 @@ from lib.config import (
     AGE_CURVES,
     AGE_TREND_DAMPENING,
     TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
+    QB_RUSHING_YARDS_WEIGHT,
+    QB_RUSHING_EMPHASIS_STRENGTH,
+    TARGET_SHARE_ADJUSTMENT_STRENGTH,
 )
 
 POSITIONS = ["QB", "RB", "WR", "TE"]
 
 
-def load_year_context(year: int) -> dict:
+def load_year_context(season_summary: pl.DataFrame, year: int) -> dict:
     """
     Network-dependent data for a backtest year that does NOT change
     across config variations (ages, rostered ids/teams, roster status,
-    team offense strength) — fetch once per year and reuse across as
-    many scoring calls as needed.
+    team offense strength, target share) — fetch once per year and
+    reuse across as many scoring calls as needed.
 
     load_player_teams() is fetched once and used to derive rostered_ids
     directly (rather than also calling load_currently_rostered_ids(),
     which would repeat the same load_rosters() network call).
 
-    team_offense uses load_team_offense_strength()'s own default
-    LOOKBACK_SEASONS/DECAY regardless of any lookback_seasons/decay
-    override passed to score_year — kept independent of the player-level
-    search so grid_search.py's LOOKBACK_SEASONS/DECAY stage doesn't
-    inadvertently also move the team-level signal; only
-    team_offense_adjustment_strength is meant to be tuned per-call.
+    team_offense and target_share use their own default LOOKBACK_SEASONS/
+    DECAY regardless of any lookback_seasons/decay override passed to
+    score_year — kept independent of the player-level search so
+    grid_search.py's LOOKBACK_SEASONS/DECAY stage doesn't inadvertently
+    also move these team/usage-level signals; only their own *_STRENGTH
+    knobs are meant to be tuned per-call. QB rushing emphasis is the
+    exception — load_qb_rushing_emphasis has no network call (reads
+    directly from season_summary, already loaded), so it's cheap enough
+    to recompute per grid point and IS allowed to vary with
+    qb_rushing_yards_weight in build_backtest_projection instead of
+    being cached here.
     """
     player_teams = load_player_teams(year)
     return {
@@ -82,6 +94,7 @@ def load_year_context(year: int) -> dict:
         "rostered_ids": None if player_teams is None else set(player_teams["player_id"].to_list()),
         "roster_status": load_current_roster_status(year),
         "team_offense": load_team_offense_strength(year),
+        "target_share": load_target_share(season_summary, year),
     }
 
 
@@ -95,6 +108,9 @@ def build_backtest_projection(
     age_curves: dict = AGE_CURVES,
     age_trend_dampening: float = AGE_TREND_DAMPENING,
     team_offense_adjustment_strength: float = TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
+    qb_rushing_yards_weight: float = QB_RUSHING_YARDS_WEIGHT,
+    qb_rushing_emphasis_strength: float = QB_RUSHING_EMPHASIS_STRENGTH,
+    target_share_adjustment_strength: float = TARGET_SHARE_ADJUSTMENT_STRENGTH,
     verbose: bool = True,
 ) -> pl.DataFrame:
     """
@@ -103,11 +119,16 @@ def build_backtest_projection(
     steps (minus ADP proxy, which needs no validation here).
 
     lookback_seasons/decay/age_curves/age_trend_dampening/
-    team_offense_adjustment_strength default to module-level config but
-    can be overridden — used by bin/grid_search.py to test alternate
-    values. verbose=False silences the per-call roster-status drop
-    count, which would otherwise print once per grid point across a
-    search.
+    team_offense_adjustment_strength/qb_rushing_yards_weight/
+    qb_rushing_emphasis_strength/target_share_adjustment_strength default
+    to module-level config but can be overridden — used by
+    bin/grid_search.py to test alternate values. verbose=False silences
+    the per-call roster-status drop count, which would otherwise print
+    once per grid point across a search.
+
+    qb_rushing_emphasis is recomputed here (not cached in year_context)
+    since it has no network call and needs to vary with
+    qb_rushing_yards_weight during a search.
     """
     projections = recency_weighted_projection(season_summary, year, lookback_seasons, decay)
     projections = apply_age_adjustment(projections, year_context["ages"], age_curves, age_trend_dampening)
@@ -121,6 +142,13 @@ def build_backtest_projection(
         year_context["player_teams"],
         year_context["team_offense"],
         team_offense_adjustment_strength,
+    )
+
+    qb_yards = load_qb_rushing_emphasis(season_summary, year, lookback_seasons, decay, qb_rushing_yards_weight)
+    projections = apply_qb_rushing_emphasis(projections, qb_yards, qb_rushing_emphasis_strength)
+
+    projections = apply_target_share_adjustment(
+        projections, year_context["target_share"], target_share_adjustment_strength
     )
 
     projections = filter_excluded_roster_status(projections, year_context["roster_status"], verbose=verbose)
@@ -207,7 +235,7 @@ def main(years: list[int]):
     for year in years:
         print(f"\n=== Backtesting {year} ===")
         print(f"  Loading roster/age/status context for {year}...")
-        year_context = load_year_context(year)
+        year_context = load_year_context(season_summary, year)
         print(f"  Building projections as of {year} (using only data before it)...")
         result = score_year(season_summary, year, year_context)
         if result is None:
