@@ -315,14 +315,55 @@ which wasn't true before).
 
 ## Build order / status
 
-Requirements → projection model → cheat sheet (VBD/tiers) → **React UI
-(done, functional)** → **live draft assistant (not started)** → ESPN
-auto-sync (explicitly last, deferred — no official public API, will need
-unofficial endpoints and possibly session cookies for private leagues).
+Requirements → projection model (**done, backtested + grid-search
+tuned**) → cheat sheet (VBD/tiers, **done**) → React UI (**done,
+functional, includes manual pick tracking**) → live draft assistant
+(**manual pick tracking done**; roster-needs tracking / best-available
+recommendations / positional scarcity alerts not started) → ESPN
+auto-sync (**tabled until after this season's draft** — see "ESPN Live
+Draft Sync — Design Notes" below).
 
-Next planned step: the live draft assistant — track picks (manual entry
-first), maintain available-player pool, track roster needs, surface
-best-available recommendations, positional scarcity alerts.
+## Where things stand (session handoff)
+
+Everything below is committed and pushed to `main` — working tree clean,
+nothing local-only except gitignored secrets (see the ESPN section).
+
+- **Model**: DECAY, TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
+  QB_RUSHING_YARDS_WEIGHT/STRENGTH, and TARGET_SHARE_ADJUSTMENT_STRENGTH
+  are all backtest-confirmed (see "Tuning" section above).
+  AGE_CURVES is flagged low-confidence — real overfitting evidence, don't
+  trust a future grid_search.py Stage 3 run just because it looks
+  "consistent." LOOKBACK_SEASONS left at its original default (5) — the
+  search signal for it was noisy across windows, not worth chasing.
+- **App**: manual pick tracking works — checkbox removes a player from
+  the board, Reset (with a confirm dialog) brings everyone back,
+  localStorage-persisted so a reload mid-draft doesn't lose picks.
+  Verified with a scripted Playwright pass (screenshots + console-error
+  check), not just by reading the code.
+- **ESPN auto-sync**: tested for real against a live mock draft.
+  `espn_api`'s `_fetch_draft()` explicitly won't populate any picks
+  until ESPN's own `drafted` flag is `true` (whole draft complete) — a
+  hard limitation of that library, not confirmed proof ESPN's backend
+  lacks live data (the mock draft's temporary league got torn down
+  before the raw JSON could be checked underneath that gate). If
+  revisiting after this season: either bypass espn_api and hit
+  `league.espn_request.get_league_draft()` directly to check for live
+  picks in the raw response, or fall back to Option B (Playwright
+  reading the draft room DOM) — see the design notes below.
+  `tests/espn_draft_sync_spike.py` is the polling script already built
+  for this; `tests/espn_credentials.local.json` (gitignored, NOT in git)
+  holds real SWID/espn_s2 cookies if that file is still on this machine
+  — no need to re-extract them from the browser to pick this back up.
+- **Before your actual draft**: rerun `./refresh_cheat_sheet.sh` close
+  to draft day — the currently-rostered filter depends on nflreadpy's
+  roster snapshot being current, and free-agent signings/depth-chart
+  moves can happen right up until then.
+- **Publishing**: `npm run build && npm run deploy` from
+  `fantasy-draft-app/` publishes to GitHub Pages (already configured —
+  correct `base` path, `gh-pages` package installed). Not run by Claude
+  this session — you said you'd handle the actual Pages publish
+  yourself, so confirm it's live before relying on the hosted URL during
+  a draft.
 
 # ESPN Live Draft Sync — Design Notes
 
