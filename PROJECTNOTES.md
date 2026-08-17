@@ -129,6 +129,74 @@ didn't specify a split. Worth trying next: passing yards for WR/TE/QB,
 rushing yards for RB, since a run-first team's total yards can look fine
 while still being a bad environment for its receiving corps specifically.
 
+## QB rushing emphasis + target share adjustment
+
+Two more player-level signals, added together to fix a concrete problem:
+QB tier 2 had 12 players bunched together (Jared Goff/Matthew Stafford/
+Dak Prescott mixed in with Jalen Hurts/Lamar Jackson/Bo Nix — very
+different real fantasy profiles) because projected_fantasy_points alone
+wasn't spreading them out enough for the tiering threshold to ever fire
+— the same "flat curve" issue already fixed for WR, but compounded here
+by QB rushing production not being weighted heavily enough as a
+differentiator.
+
+- **QB rushing emphasis** (`load_qb_rushing_emphasis`/
+  `apply_qb_rushing_emphasis` in `projection_model.py`): each QB's
+  recency-weighted "emphasized yards" (`passing_yards +
+  QB_RUSHING_YARDS_WEIGHT x rushing_yards`) relative to the QB position
+  average, applied as a multiplicative boost/discount on top of
+  projected_fantasy_points. Deliberately an EXTRA emphasis, not
+  re-counting points already earned — rushing yards already count
+  toward a QB's historical fantasy points the same as everyone else's.
+  `QB_RUSHING_YARDS_WEIGHT=3.0` (grid-searched, moved from an initial
+  2.5 guess — a genuine interior optimum, 4.0 was tested and lost),
+  `QB_RUSHING_EMPHASIS_STRENGTH=0.3` (grid-searched, confirmed initial
+  guess).
+- **Target share adjustment** (`load_target_share`/
+  `apply_target_share_adjustment`): each RB/WR/TE's recency-weighted
+  share of their team's total targets, relative to the position average
+  — refines the team offense adjustment (which boosts every pass-catcher
+  on a team identically) with each player's own share of that team's
+  passing volume, differentiating a true WR1 from a same-team WR3, or a
+  receiving back from a between-the-tackles committee runner.
+  `TARGET_SHARE_ADJUSTMENT_STRENGTH=0.3` (grid-searched, confirmed
+  initial guess, genuine interior optimum — 1.5 was tested and lost).
+
+Both required extending `compute_fantasy_points.py`'s `build_season_summary()`
+to retain raw targets/rushing_yards/passing_yards per player-season (previously
+discarded after computing fantasy points) plus each player's primary team for
+the season — required a `--force` recompute of `fantasy_points_by_season.csv`.
+
+**Real bug found and fixed while building this**: the position-average
+baseline for both adjustments was originally a simple per-player mean
+across the currently-rostered pool at a position. That's still wrong —
+every roster carries a long tail of 2nd/3rd-string backups with
+near-zero relevant usage (a backup QB who's thrown 10 career passes, a
+committee-piece RB with 3 career targets), and averaging them in
+alongside real starters drags the baseline way down, which in turn
+inflates every real starter's ratio far past anything reasonable (found
+empirically: Josh Allen's qb_yards_ratio came out at 2.8x, Bijan
+Robinson's target_share_ratio at 4.5x under a simple mean — his
+projected points came out at 662, roughly double a sane top-RB
+projection). Fixed with `_points_weighted_position_average()` — weights
+each player's contribution to the baseline by their own (pre-adjustment)
+projected_fantasy_points, so irrelevant bench players barely move it.
+Shared by both adjustments.
+
+**Backtest results**: per-position rank correlation improved in most
+cells (QB, RB, TE, WR all individually up in the grid search's own
+unweighted-mean-across-cells metric, +0.0028 overall on that metric).
+The backtest.py "OVERALL ACCURACY" pooled correlation (all 2229
+player-seasons combined) came out essentially flat (~0.8005, statistically
+indistinguishable from before) — that number is dominated by WR's larger
+sample size and isn't the actual objective these knobs were tuned
+against, so don't read too much into it moving or not moving; the
+per-position, per-cell numbers are the more meaningful comparison here.
+The QB tiering problem this was built to fix is visibly resolved: tier 2
+dropped from 12 players to 5, with the dual-threat/pocket-passer split
+now reflected in the ordering (Bo Nix/Hurts ahead of Stafford/Prescott,
+which wasn't true before).
+
 ## Known gotchas already hit (don't re-debug these)
 
 - **`load_rosters()` and `load_team_stats()` disagree on Arizona's team
