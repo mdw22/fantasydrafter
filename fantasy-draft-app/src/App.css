@@ -90,6 +90,33 @@ body {
   border-color: var(--flag);
 }
 
+.tabs__spacer {
+  flex: 1;
+}
+
+.drafted-count {
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(241, 237, 228, 0.6);
+  white-space: nowrap;
+}
+
+.tab--reset {
+  border-color: var(--alert);
+}
+
+.tab--reset:hover:not(:disabled) {
+  background: var(--alert);
+  color: var(--chalk);
+  border-color: var(--alert);
+}
+
+.tab--reset:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 /* --- Table --- */
 
 .board-table {
@@ -122,6 +149,18 @@ body {
 .board-table td {
   padding: 8px 10px;
   font-size: 0.9rem;
+}
+
+.col-draft {
+  width: 32px;
+  text-align: center;
+}
+
+.draft-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--flag);
+  cursor: pointer;
 }
 
 .col-rank {

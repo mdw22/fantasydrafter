@@ -3,6 +3,20 @@ import { useEffect, useMemo, useState } from "react";
 const POSITIONS = ["QB", "RB", "WR", "TE"];
 const TABS = ["ALL", ...POSITIONS];
 
+// Persisted across reloads — a live draft can run long, and losing every
+// checked-off pick to an accidental refresh would be a real problem, not
+// just an inconvenience.
+const DRAFTED_STORAGE_KEY = "fantasydrafter:draftedPlayerIds";
+
+function loadDraftedIds() {
+  try {
+    const raw = localStorage.getItem(DRAFTED_STORAGE_KEY);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 function ValueBadge({ delta }) {
   // delta = vbd_vs_adp_proxy_overall: positive means the model likes this
   // player earlier than their prior-season finish (proxy) would suggest;
@@ -23,9 +37,17 @@ function PositionChip({ position }) {
   return <span className={`chip chip--${position}`}>{position}</span>;
 }
 
-function PlayerRow({ player, rankField }) {
+function PlayerRow({ player, rankField, onDraft }) {
   return (
     <tr>
+      <td className="col-draft">
+        <input
+          type="checkbox"
+          className="draft-checkbox"
+          aria-label={`Mark ${player.player_display_name} as drafted`}
+          onChange={() => onDraft(player.player_id)}
+        />
+      </td>
       <td className="col-rank">{player[rankField]}</td>
       <td className="col-name">
         <PositionChip position={player.position} /> {player.player_display_name}
@@ -42,7 +64,7 @@ function PlayerRow({ player, rankField }) {
 function TierDivider({ tier }) {
   return (
     <tr className="tier-divider-row">
-      <td colSpan={5}>
+      <td colSpan={6}>
         <div className="tier-divider">
           <span className="tier-divider__chevron">▶</span>
           <span className="tier-divider__label">Tier {tier}</span>
@@ -57,6 +79,7 @@ export default function App() {
   const [players, setPlayers] = useState(null);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("ALL");
+  const [draftedIds, setDraftedIds] = useState(loadDraftedIds);
 
   useEffect(() => {
     // Fetched from public/data/cheat_sheet.json at runtime — regenerate
@@ -71,15 +94,32 @@ export default function App() {
       .catch((err) => setError(err.message));
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem(DRAFTED_STORAGE_KEY, JSON.stringify([...draftedIds]));
+  }, [draftedIds]);
+
+  const handleDraft = (playerId) => {
+    setDraftedIds((prev) => new Set(prev).add(playerId));
+  };
+
+  const handleReset = () => {
+    if (draftedIds.size === 0) return;
+    if (!window.confirm(`Reset ${draftedIds.size} drafted player(s) back to the board?`)) {
+      return;
+    }
+    setDraftedIds(new Set());
+  };
+
   const rows = useMemo(() => {
     if (!players) return [];
+    const available = players.filter((p) => !draftedIds.has(p.player_id));
     if (activeTab === "ALL") {
-      return [...players].sort((a, b) => a.vbd_rank_overall - b.vbd_rank_overall);
+      return available.sort((a, b) => a.vbd_rank_overall - b.vbd_rank_overall);
     }
-    return players
+    return available
       .filter((p) => p.position === activeTab)
       .sort((a, b) => a.position_rank - b.position_rank);
-  }, [players, activeTab]);
+  }, [players, activeTab, draftedIds]);
 
   // Group by tier only for a single-position view — tiers are computed
   // within each position, so a "Tier 1" QB and a "Tier 1" RB aren't
@@ -117,6 +157,15 @@ export default function App() {
             {tab}
           </button>
         ))}
+        <div className="tabs__spacer" />
+        <span className="drafted-count">{draftedIds.size} drafted</span>
+        <button
+          className="tab tab--reset"
+          onClick={handleReset}
+          disabled={draftedIds.size === 0}
+        >
+          Reset
+        </button>
       </nav>
 
       <main className="board">
@@ -141,6 +190,7 @@ export default function App() {
           <table className="board-table">
             <thead>
               <tr>
+                <th className="col-draft" aria-label="Drafted" />
                 <th className="col-rank">Rk</th>
                 <th className="col-name">Player</th>
                 <th className="col-num">Proj</th>
@@ -155,10 +205,11 @@ export default function App() {
                       key={player.player_id}
                       player={player}
                       rankField="vbd_rank_overall"
+                      onDraft={handleDraft}
                     />
                   ))
                 : groupedByTier.map((group) => (
-                    <FragmentGroup key={group.tier} group={group} />
+                    <FragmentGroup key={group.tier} group={group} onDraft={handleDraft} />
                   ))}
             </tbody>
           </table>
@@ -168,12 +219,17 @@ export default function App() {
   );
 }
 
-function FragmentGroup({ group }) {
+function FragmentGroup({ group, onDraft }) {
   return (
     <>
       <TierDivider tier={group.tier} />
       {group.players.map((player) => (
-        <PlayerRow key={player.player_id} player={player} rankField="position_rank" />
+        <PlayerRow
+          key={player.player_id}
+          player={player}
+          rankField="position_rank"
+          onDraft={onDraft}
+        />
       ))}
     </>
   );
