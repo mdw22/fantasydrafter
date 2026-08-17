@@ -3,8 +3,7 @@
 # that changes every time the pipeline is rerun.
 fantasydrafter/lib/*.csv
 .venv
-package-lock.json
-PROJECTNOTES.md
+/package-lock.json
 
 # Python bytecode cache
 __pycache__/
