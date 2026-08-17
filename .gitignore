@@ -8,3 +8,8 @@ fantasydrafter/lib/*.csv
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# ESPN auth cookies (SWID/espn_s2) and any other local-only secrets —
+# never commit these. See PROJECTNOTES.md "Auth handling note".
+*.local.json
+espn_credentials*

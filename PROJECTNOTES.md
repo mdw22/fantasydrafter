@@ -323,3 +323,94 @@ unofficial endpoints and possibly session cookies for private leagues).
 Next planned step: the live draft assistant — track picks (manual entry
 first), maintain available-player pool, track roster needs, surface
 best-available recommendations, positional scarcity alerts.
+
+# ESPN Live Draft Sync — Design Notes
+
+Goal: when you make a pick in the actual ESPN draft room, the app updates
+automatically — no manual "mark as picked" step.
+
+## What's actually available
+
+ESPN has no official public API for this. Everything below is
+unofficial/reverse-engineered, used at your own risk (could break without
+notice if ESPN changes something).
+
+### Option A — Poll ESPN's private REST API
+
+ESPN's site itself calls an undocumented endpoint to load draft data:
+
+```
+GET https://fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagues/{league_id}?view=mDraftDetail
+```
+
+- For a **private league** (yours), this requires two auth cookies from
+  your own browser session: `SWID` and `espn_s2`. You grab these once
+  from your browser's dev tools (Application → Cookies) after logging
+  into ESPN, and the script sends them as request cookies.
+- There's an established Python wrapper, `espn-api` (cwendt94 on GitHub,
+  `pip install espn_api`), that handles this — `league.draft` returns
+  pick objects (player, round, team) after calling `.fetch()` /
+  re-initializing the `League` object.
+- **Unconfirmed**: whether this reflects picks *while the draft is still
+  in progress*, or only after it's marked complete. There's an open,
+  unanswered GitHub issue asking exactly this
+  (cwendt94/espn-api#558). Worth testing directly — e.g. start a mock
+  draft, make a pick, and see if a fresh API call picks it up within a
+  few seconds.
+- If it works, this is the cleanest option: a script polling every few
+  seconds, diffing the pick list against last poll, no browser
+  automation needed.
+
+### Option B — Read the live draft room page directly
+
+This is what the commercial tools (DraftKick, Draft Sharks Game Changer)
+appear to actually do — they run as a browser extension inside the ESPN
+draft room tab itself, reading whatever's rendered on screen, rather than
+calling ESPN's backend API.
+
+- More resilient to backend API changes (reads the UI, not the private
+  API) — but breaks instead if ESPN changes their page's HTML structure.
+- Two ways to implement this:
+  1. **A real Chrome extension** — most robust, but by far the most
+     engineering effort (extension packaging, content scripts, dev
+     workflow).
+  2. **A Playwright script** that loads the draft room with your saved
+     login cookies and polls the rendered DOM on an interval, diffing
+     for new picks. Simpler than a full extension, still works while a
+     browser window stays open during your draft. (There's a public
+     example of someone doing roughly this for a similar "read the
+     draft room and feed it to an LLM" use case — scraping player pool
+     HTML with Playwright + saved cookies.)
+- Only works while that browser window/tab stays open and on the draft
+  page for the duration of your draft.
+
+### Option C — Manual entry (the fallback, already effectively built)
+
+Worth keeping regardless of which auto-sync option is pursued — if the
+live sync lags, drops a pick, or breaks mid-draft, you need a way to
+correct it by hand without the whole tool being useless for the rest of
+the draft.
+
+## Recommendation
+
+1. **Test Option A first** — it's by far the least engineering effort if
+   it actually works live. Quick test: start an ESPN mock draft, make a
+   pick, immediately hit the `mDraftDetail` endpoint (or call
+   `league.draft` again via `espn_api`) and see if the pick shows up
+   within a few seconds. If yes, build the polling sync on this.
+2. **If Option A doesn't reflect live picks**, fall back to Option B,
+   starting with the Playwright DOM-scraping approach (2b) rather than a
+   full Chrome extension (2a) — much less effort, and sufficient for a
+   personal tool used once a year.
+3. **Always keep manual override/correction available** (Option C),
+   regardless of which auto path is used — auto-sync should be a
+   convenience layer on top of a system that still works if it fails.
+
+## Auth handling note
+
+`SWID` and `espn_s2` are session auth cookies, not your ESPN password —
+but they're still sensitive (they grant access to your account's private
+league data) and shouldn't be committed to the GitHub repo. Store them in
+a local `.env` file or similar, and make sure it's covered by
+`.gitignore` (same mistake as the `.venv` commit earlier — worth
+double-checking before the first commit that touches this).
