@@ -17,6 +17,10 @@ const TABS = ["ALL", ...POSITIONS, ROSTER_SLOT_TAB];
 // only by the autodraft testing toggle, not a true positional simulator.
 const OPPONENT_PICKS_PER_ROUND = 13;
 
+// Tunable — how often an auto-pick takes the next-best-VBD player instead
+// of the top one, so all 13 opponents don't read as one uniform BPA bot.
+const AUTODRAFT_ALT_PICK_CHANCE = 0.25;
+
 const STARTING_SLOT_POSITIONS = ["QB", "RB", "RB", "WR", "WR", "TE"];
 const FLEX_ELIGIBLE = ["RB", "WR", "TE"];
 const BENCH_SLOT_COUNT = 7;
@@ -204,29 +208,43 @@ export default function App() {
   // A pick you made yourself is both "off the board" and "on your roster" —
   // one click covers both, since most picks (13/14) are the plain "drafted
   // by someone else" case that only needs the former.
+  //
+  // Computed from closure state up front (not inside a setDraftedIds
+  // updater) because autodraft's Math.random() makes this impure — an
+  // updater function must be pure, since React.StrictMode double-invokes it
+  // in dev to check exactly that, which would burn two random draws per
+  // pick instead of one. A plain click handler isn't re-invoked that way,
+  // so reading draftedIds from closure here is safe.
   const handleDraftMine = (playerId) => {
-    setDraftedIds((prevDrafted) => {
-      const nextDrafted = new Set(prevDrafted).add(playerId);
-      if (!autodraftEnabled || !players) return nextDrafted;
+    const nextDrafted = new Set(draftedIds).add(playerId);
 
+    if (autodraftEnabled && players) {
       // Testing aid: fill the next 13 (one full round of opponents) with
       // the highest-VBD player still available each time, no strategy
       // involved. A fresh per-batch position tally (not your own roster
       // counts) keeps one round from piling up e.g. 10 QBs in a row.
       const batchCounts = { QB: 0, RB: 0, WR: 0, TE: 0 };
       for (let i = 0; i < OPPONENT_PICKS_PER_ROUND; i++) {
-        const pick = players
+        const candidates = players
           .filter((p) => !nextDrafted.has(p.player_id))
           .filter(
             (p) => (batchCounts[p.position] ?? 0) < (MAX_ROSTER_COUNTS[p.position] ?? Infinity)
           )
-          .sort((a, b) => b.vbd - a.vbd)[0];
-        if (!pick) break; // pool exhausted or every position capped this batch
+          .sort((a, b) => b.vbd - a.vbd);
+        if (candidates.length === 0) break; // pool exhausted or every position capped this batch
+
+        // Usually take the top (raw-VBD-best) candidate, but sometimes take
+        // the next-best instead — the "also consider" option from the same
+        // pool, not a full strategy re-score.
+        const takeAlt = candidates.length > 1 && Math.random() < AUTODRAFT_ALT_PICK_CHANCE;
+        const pick = takeAlt ? candidates[1] : candidates[0];
+
         nextDrafted.add(pick.player_id);
         batchCounts[pick.position] = (batchCounts[pick.position] ?? 0) + 1;
       }
-      return nextDrafted;
-    });
+    }
+
+    setDraftedIds(nextDrafted);
     setMyRosterIds((prev) => new Set(prev).add(playerId));
   };
 

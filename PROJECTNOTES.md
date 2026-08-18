@@ -401,6 +401,25 @@ Two more additions on top of the above, in `App.jsx`.
   Skipped the optional summary-line nice-to-have (total starter
   points) — the design doc flagged it as droppable if it added
   complexity, and the slot list alone covers the actual ask.
+- **Autodraft randomness** (`AUTODRAFT_ALT_PICK_CHANCE = 0.25`, tunable):
+  each of the 13 auto-picks usually takes the top-remaining-VBD
+  candidate but sometimes (25%) takes the next-best instead, so all 13
+  opponents don't read as one uniform BPA bot. **Real bug found and
+  fixed while building this**: the random logic originally lived inside
+  the `setDraftedIds` updater function passed to `setState`. That's an
+  impurity violation — `App.jsx` renders inside `React.StrictMode`
+  (`main.jsx`), which double-invokes updater functions in dev
+  specifically to catch this, so `Math.random()` was silently getting
+  called twice per pick, and the two invocations could disagree on
+  which player got drafted. Fixed by computing the whole batch (mine
+  pick + 13 auto-picks) up front in the `handleDraftMine` click handler
+  from closure state, then passing a plain `Set` value to
+  `setDraftedIds` instead of an updater function — a plain click
+  handler isn't re-invoked by StrictMode, so this is safe. Verified by
+  forcing `Math.random()` to a scripted sequence and hand-simulating
+  the expected output in the test — exact match confirmed post-fix
+  (mismatched pre-fix, confirming the bug was real, not just
+  theoretical).
 
 ## Where things stand (session handoff)
 
