@@ -340,20 +340,37 @@ nothing local-only except gitignored secrets (see the ESPN section).
   localStorage-persisted so a reload mid-draft doesn't lose picks.
   Verified with a scripted Playwright pass (screenshots + console-error
   check), not just by reading the code.
-- **ESPN auto-sync**: tested for real against a live mock draft.
-  `espn_api`'s `_fetch_draft()` explicitly won't populate any picks
-  until ESPN's own `drafted` flag is `true` (whole draft complete) — a
-  hard limitation of that library, not confirmed proof ESPN's backend
-  lacks live data (the mock draft's temporary league got torn down
-  before the raw JSON could be checked underneath that gate). If
-  revisiting after this season: either bypass espn_api and hit
-  `league.espn_request.get_league_draft()` directly to check for live
-  picks in the raw response, or fall back to Option B (Playwright
-  reading the draft room DOM) — see the design notes below.
-  `tests/espn_draft_sync_spike.py` is the polling script already built
-  for this; `tests/espn_credentials.local.json` (gitignored, NOT in git)
+- **ESPN auto-sync**: tested twice now, against two separate mock
+  drafts, with two independent libraries — same negative result both
+  times. (1) Python `espn_api`: `_fetch_draft()` explicitly won't
+  populate any picks until ESPN's own `drafted` flag is `true` (whole
+  draft complete). (2) JS `espn-fantasy-football-api`'s
+  `getDraftInfo({ seasonId })`: this one has NO such gate — it returns
+  the full draft grid immediately (224 slots for a 14-team/16-round
+  league), with unfilled slots as placeholders (`id: -1`). Made a real
+  pick in the mock draft UI and polled directly for 20+ seconds
+  afterward: still 0 filled slots. Because this second test bypassed
+  any library-side "wait until complete" gate and still saw nothing
+  live, this is now decent evidence the live data genuinely isn't there
+  for a **mock** draft specifically — not just a library limitation.
+  **Important caveat, still unconfirmed**: both tests were against mock
+  drafts. Mock drafts may be simulated client-side and never hit
+  whatever backend a real paid-league draft writes to — this result may
+  not generalize to a real draft. If revisiting after this season, test
+  against a real league draft before concluding Option A is fully dead;
+  otherwise fall back to Option B (Playwright reading the draft room
+  DOM) — see the design notes below, now updated with these findings.
+  `tests/espn_draft_sync_spike.py` (Python, committed in the repo) is
+  the polling script already built for this. The JS package/scratch
+  folder from the second test was throwaway (outside the repo, in the
+  session scratchpad) and has been fully deleted — nothing to clean up
+  there. `tests/espn_credentials.local.json` (gitignored, NOT in git)
   holds real SWID/espn_s2 cookies if that file is still on this machine
   — no need to re-extract them from the browser to pick this back up.
+  **Open question left unanswered**: whether to `pip uninstall espn_api`
+  from `.venv` (unused by any production code, only by the spike
+  script, not declared in any requirements file) — asked, no response
+  yet, harmless to leave either way.
 - **Before your actual draft**: rerun `./refresh_cheat_sheet.sh` close
   to draft day — the currently-rostered filter depends on nflreadpy's
   roster snapshot being current, and free-agent signings/depth-chart
@@ -391,16 +408,23 @@ GET https://fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagu
 - There's an established Python wrapper, `espn-api` (cwendt94 on GitHub,
   `pip install espn_api`), that handles this — `league.draft` returns
   pick objects (player, round, team) after calling `.fetch()` /
-  re-initializing the `League` object.
-- **Unconfirmed**: whether this reflects picks *while the draft is still
-  in progress*, or only after it's marked complete. There's an open,
-  unanswered GitHub issue asking exactly this
-  (cwendt94/espn-api#558). Worth testing directly — e.g. start a mock
-  draft, make a pick, and see if a fresh API call picks it up within a
-  few seconds.
-- If it works, this is the cleanest option: a script polling every few
-  seconds, diffing the pick list against last poll, no browser
-  automation needed.
+  re-initializing the `League` object. There's also a JS wrapper,
+  `espn-fantasy-football-api` (mkreiser on GitHub) —
+  `client.getDraftInfo({ seasonId })` returns the full draft grid.
+- **Tested twice (see "Where things stand" above for full detail) —
+  does NOT reflect live picks for a mock draft, with either library.**
+  The Python wrapper gates on ESPN's `drafted` flag (won't show
+  anything until the whole draft is marked complete). The JS wrapper
+  has no such gate and returns real-time data structurally (a
+  pre-sized grid of pick slots, `id: -1` for unfilled ones) — and it
+  still showed 0 filled slots 20+ seconds after a real pick was made in
+  the UI. The open GitHub issue that originally raised this question
+  (cwendt94/espn-api#558) is still unanswered upstream, but our own
+  test is a fairly direct answer for the mock-draft case.
+- **Still open**: whether a REAL league draft (not a mock) behaves the
+  same way. Mock drafts may be simulated client-side and never hit
+  whatever backend a real draft writes to — untested, and the natural
+  next step if revisiting this after the mock-draft evidence.
 
 ### Option B — Read the live draft room page directly
 
@@ -434,15 +458,19 @@ the draft.
 
 ## Recommendation
 
-1. **Test Option A first** — it's by far the least engineering effort if
-   it actually works live. Quick test: start an ESPN mock draft, make a
-   pick, immediately hit the `mDraftDetail` endpoint (or call
-   `league.draft` again via `espn_api`) and see if the pick shows up
-   within a few seconds. If yes, build the polling sync on this.
-2. **If Option A doesn't reflect live picks**, fall back to Option B,
-   starting with the Playwright DOM-scraping approach (2b) rather than a
-   full Chrome extension (2a) — much less effort, and sufficient for a
-   personal tool used once a year.
+**Current status: tabled until after this season's draft** — manual
+entry (Option C) is built and in use (the checkbox + Reset UI in the
+React app). The plan below is for if/when this gets revisited.
+
+1. ~~Test Option A first~~ — **done, twice, negative result for mock
+   drafts** (see above). Before spending more time on Option A, test
+   against a REAL league draft specifically — the mock-draft result may
+   not generalize, and this is a five-minute check before committing to
+   Option B's much larger effort.
+2. **If Option A still doesn't reflect live picks on a real draft**,
+   move to Option B, starting with the Playwright DOM-scraping approach
+   (2b) rather than a full Chrome extension (2a) — much less effort, and
+   sufficient for a personal tool used once a year.
 3. **Always keep manual override/correction available** (Option C),
    regardless of which auto path is used — auto-sync should be a
    convenience layer on top of a system that still works if it fails.
