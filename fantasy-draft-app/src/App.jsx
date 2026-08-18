@@ -358,7 +358,18 @@ export default function App() {
     if (activeTab === "ALL") {
       const sorted = [...scoredAvailable];
       if (sortByStrategy) {
-        sorted.sort(compareByScoreThenVBD);
+        // Capped positions (MAX_ROSTER_COUNTS) sink below everything still
+        // eligible, same as the Recommended Pick callout already does —
+        // otherwise a capped position with less-negative VBD than what's
+        // left elsewhere (a common late-round pattern) floats back to the
+        // top of "best remaining" even though the strategy has no more use
+        // for it, undermining the whole point of sorting by strategy.
+        sorted.sort((a, b) => {
+          const aFull = isPositionFull(a.position, rosterCounts);
+          const bFull = isPositionFull(b.position, rosterCounts);
+          if (aFull !== bFull) return aFull ? 1 : -1;
+          return compareByScoreThenVBD(a, b);
+        });
       } else {
         sorted.sort((a, b) => a.vbd_rank_overall - b.vbd_rank_overall);
       }
@@ -367,7 +378,7 @@ export default function App() {
     return scoredAvailable
       .filter((p) => p.position === activeTab)
       .sort((a, b) => a.position_rank - b.position_rank);
-  }, [players, activeTab, scoredAvailable, sortByStrategy]);
+  }, [players, activeTab, scoredAvailable, sortByStrategy, rosterCounts]);
 
   // Group by tier only for a single-position view — tiers are computed
   // within each position, so a "Tier 1" QB and a "Tier 1" RB aren't

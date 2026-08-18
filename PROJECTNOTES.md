@@ -382,6 +382,28 @@ pool), the recommendation correctly falls back to "No recommendation
 available" instead of suggesting a 3rd QB or TE — direct proof the cap
 excludes them rather than just happening to lose to RB/WR on score.
 
+**Real bug found and fixed after that**: the verification above only
+proved the cap works for the single "Recommended:" callout — it never
+tested the "Sort by strategy" toggle path. The user's actual drafting
+method (confirmed directly: "sort by strategy and picking the top of
+the list") bypassed the cap entirely, since `rows`' sort branch called
+`compareByScoreThenVBD` directly with no `isPositionFull` check at all.
+Concretely: QB/TE get no boost either way (score = raw VBD), so once
+good RB/WR are gone in the late rounds and everything left is
+negative-VBD, a capped-out position can still have a *less negative*
+VBD than what's left elsewhere and float back to the top of "best
+remaining" — this is exactly how a real run produced 3 QBs and 7 TEs
+(one screenshot shared directly: `BENCH 3`–`BENCH 8` all TE, VBD as low
+as -55.1) despite the caps supposedly being 2 each. Fixed in `App.jsx`'s
+`rows` useMemo: when `sortByStrategy` is on, capped positions now sort
+below every eligible player first, then by score/VBD within each group
+— same effective exclusion the callout already had, just applied to the
+full board ordering too. Re-verified with a full 14-round simulation
+(autodraft on for opponents, sort-by-strategy on, picking top-of-list
+for all 14 of my own picks, matching the reported workflow exactly):
+final roster QB=2, TE=2, RB=4, WR=6 — caps and floors both hold for the
+whole draft, not just the first few picks.
+
 ### Autodraft toggle (testing) + My Roster tab
 
 Two more additions on top of the above, in `App.jsx`.
