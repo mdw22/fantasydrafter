@@ -333,6 +333,58 @@ body {
   font-style: italic;
 }
 
+.draft-grade-panel {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--field-deep);
+  border: 2px solid var(--hash);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.draft-grade-panel__grade {
+  font-family: var(--font-display);
+  font-size: 2.2rem;
+  line-height: 1;
+  color: var(--chalk);
+}
+
+.draft-grade-panel--A {
+  border-color: #7fd99a;
+}
+.draft-grade-panel--A .draft-grade-panel__grade {
+  color: #7fd99a;
+}
+
+.draft-grade-panel--B {
+  border-color: var(--flag);
+}
+.draft-grade-panel--B .draft-grade-panel__grade {
+  color: var(--flag);
+}
+
+.draft-grade-panel--C,
+.draft-grade-panel--D {
+  border-color: var(--alert);
+}
+.draft-grade-panel--C .draft-grade-panel__grade,
+.draft-grade-panel--D .draft-grade-panel__grade {
+  color: var(--alert);
+}
+
+.draft-grade-panel__detail {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: rgba(241, 237, 228, 0.7);
+}
+
+.draft-grade-panel__locked {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: rgba(241, 237, 228, 0.5);
+}
+
 /* --- Position chips --- */
 
 .chip {

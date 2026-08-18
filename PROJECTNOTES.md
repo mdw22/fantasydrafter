@@ -421,6 +421,33 @@ Two more additions on top of the above, in `App.jsx`.
   (mismatched pre-fix, confirming the bug was real, not just
   theoretical).
 
+### Draft grade
+
+A letter grade (D through A+) shown on the My Roster tab, unlocked once
+your roster hits `FULL_ROSTER_SIZE` (14 — derived from the roster-slot
+model itself: 6 starting slots + FLEX + 7 bench, so it can't drift out
+of sync with that model). `computeDraftGrade()` in `App.jsx`:
+
+- Your total: sum of `projected_fantasy_points` across your (★) roster.
+- The comparison baseline: sum of `projected_fantasy_points` across
+  every OTHER drafted player, divided evenly by 13. **This is a single
+  average-opponent baseline, not a real per-team distribution** — the
+  app only tracks "mine" vs. "drafted by someone else," not draft order
+  or which specific opponent took which player, so there's no way to
+  build 13 individual team totals to rank against. Discussed directly
+  with you: the alternative (tracking real draft order to bucket
+  opponent picks round-robin into 13 simulated teams, enabling actual
+  rank-based grading) was explicitly turned down in favor of this
+  simpler approach.
+- Grade bands are percent-above/below that baseline (tunable in
+  `GRADE_BANDS`): A+ ≥+15%, A ≥+5%, B ≥-5%, C ≥-15%, D below that.
+- Verified by seeding localStorage directly (top-14-by-projection as
+  "mine" vs. the next 182 as "others", and the inverse) and confirming
+  the app's displayed total/average/percent/grade match a hand
+  computation exactly, plus the locked pre-14-players state and the
+  panel's color coding (green A/A+, amber B, red C/D). No console
+  errors.
+
 ## Where things stand (session handoff)
 
 Everything below is committed and pushed to `main` — working tree clean,

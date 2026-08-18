@@ -24,6 +24,23 @@ const AUTODRAFT_ALT_PICK_CHANCE = 0.25;
 const STARTING_SLOT_POSITIONS = ["QB", "RB", "RB", "WR", "WR", "TE"];
 const FLEX_ELIGIBLE = ["RB", "WR", "TE"];
 const BENCH_SLOT_COUNT = 7;
+// 6 starting slots + FLEX + 7 bench = 14 — a full roster under this app's
+// slot model (not counting IR, which has no fill logic). Draft grade
+// unlocks once your roster reaches this size, deliberately derived from
+// the slot model above rather than a separate hardcoded 14, so the two
+// can't drift out of sync if the roster shape ever changes.
+const FULL_ROSTER_SIZE = STARTING_SLOT_POSITIONS.length + 1 + BENCH_SLOT_COUNT;
+
+// Percent above/below the average other team's tallied projected points.
+// Tunable — bands are deliberately symmetric around a +/-5% "about average"
+// middle band.
+const GRADE_BANDS = [
+  { min: 15, grade: "A+" },
+  { min: 5, grade: "A" },
+  { min: -5, grade: "B" },
+  { min: -15, grade: "C" },
+  { min: -Infinity, grade: "D" },
+];
 
 // Persisted across reloads — a live draft can run long, and losing every
 // checked-off pick to an accidental refresh would be a real problem, not
@@ -154,6 +171,39 @@ function buildRosterSlots(players, myRosterIds) {
     bench,
     benchSlotCount: Math.max(BENCH_SLOT_COUNT, bench.length),
   };
+}
+
+// Grades your roster's tallied projected points against a single "average
+// other team" baseline — the combined projected points of everyone drafted
+// by someone else, divided evenly across the 13 other teams. Not a real
+// per-team distribution (the app doesn't track draft order, only who
+// drafted whom), so this is a vs-average comparison, not a literal league
+// ranking.
+function computeDraftGrade(players, draftedIds, myRosterIds) {
+  const byId = new Map(players.map((p) => [p.player_id, p]));
+  const sumProjected = (ids) => {
+    let total = 0;
+    for (const id of ids) {
+      total += byId.get(id)?.projected_fantasy_points ?? 0;
+    }
+    return total;
+  };
+
+  const yourTotal = sumProjected(myRosterIds);
+  const otherIds = [...draftedIds].filter((id) => !myRosterIds.has(id));
+  const otherTotal = sumProjected(otherIds);
+  const otherAvg = otherTotal / OPPONENT_PICKS_PER_ROUND;
+
+  // No signal to compare against yet (shouldn't normally happen once your
+  // own roster is full, but guards the divide either way).
+  if (otherAvg <= 0) {
+    return { yourTotal, otherAvg, percentDiff: null, grade: "A+" };
+  }
+
+  const percentDiff = ((yourTotal - otherAvg) / otherAvg) * 100;
+  const grade = GRADE_BANDS.find((band) => percentDiff >= band.min).grade;
+
+  return { yourTotal, otherAvg, percentDiff, grade };
 }
 
 function TierDivider({ tier }) {
@@ -298,6 +348,11 @@ export default function App() {
     return buildRosterSlots(players, myRosterIds);
   }, [players, myRosterIds]);
 
+  const draftGrade = useMemo(() => {
+    if (!players || myRosterIds.size < FULL_ROSTER_SIZE) return null;
+    return computeDraftGrade(players, draftedIds, myRosterIds);
+  }, [players, draftedIds, myRosterIds]);
+
   const rows = useMemo(() => {
     if (!players || activeTab === ROSTER_SLOT_TAB) return [];
     if (activeTab === "ALL") {
@@ -436,6 +491,26 @@ export default function App() {
           <div className="empty-state">
             <p className="empty-state__title">Loading the board&hellip;</p>
           </div>
+        )}
+
+        {!error && players && activeTab === ROSTER_SLOT_TAB && (
+          <section className={`draft-grade-panel${draftGrade ? ` draft-grade-panel--${draftGrade.grade[0]}` : ""}`}>
+            {draftGrade ? (
+              <>
+                <span className="draft-grade-panel__grade">{draftGrade.grade}</span>
+                <span className="draft-grade-panel__detail">
+                  {draftGrade.percentDiff === null
+                    ? `${draftGrade.yourTotal.toFixed(1)} proj pts — no other picks to compare against yet`
+                    : `${draftGrade.yourTotal.toFixed(1)} proj pts vs. ${draftGrade.otherAvg.toFixed(1)} league avg (${draftGrade.percentDiff >= 0 ? "+" : ""}${draftGrade.percentDiff.toFixed(1)}%)`}
+                </span>
+              </>
+            ) : (
+              <span className="draft-grade-panel__locked">
+                Draft grade unlocks at {FULL_ROSTER_SIZE} players on your roster ({myRosterIds.size}/
+                {FULL_ROSTER_SIZE} so far)
+              </span>
+            )}
+          </section>
         )}
 
         {!error && players && activeTab === ROSTER_SLOT_TAB && (
