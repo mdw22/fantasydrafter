@@ -367,6 +367,21 @@ most picks in a 14-team draft aren't yours).
   localStorage persistence across reload, and Reset clearing both
   `draftedIds` and `myRosterIds`. No console errors.
 
+**Position guardrails tightened per user direction** (after seeing the
+model draft too many TEs): `MAX_ROSTER_COUNTS` QB/TE caps dropped from
+3 to 2; `POSITION_FLOORS` in `strategies.js` now also boosts WR toward a
+floor of 3 (`TARGET_WR_COUNT`-equivalent), mirroring RB's existing
+target-count-3 / 1.35x-multiplier treatment exactly — same magnitude by
+default since no separate value was specified, independently tunable.
+RB's floor (3) and cap (6) are unchanged. Verified: (1) the full
+sort-by-strategy ordering matches a hand-computed replica of the scoring
+formula exactly for the top 50 players from a fresh state, confirming
+WR now gets boosted the same way RB does; (2) with 2 QB + 2 TE already
+on the roster and every RB/WR drafted away (only QB/TE left in the
+pool), the recommendation correctly falls back to "No recommendation
+available" instead of suggesting a 3rd QB or TE — direct proof the cap
+excludes them rather than just happening to lose to RB/WR on score.
+
 ### Autodraft toggle (testing) + My Roster tab
 
 Two more additions on top of the above, in `App.jsx`.
