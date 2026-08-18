@@ -85,6 +85,22 @@ body {
   font-size: 0.85rem;
 }
 
+.autodraft-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(241, 237, 228, 0.7);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.autodraft-toggle input {
+  accent-color: var(--flag);
+  cursor: pointer;
+}
+
 .recommendation-panel__pick {
   display: flex;
   align-items: center;
@@ -297,6 +313,24 @@ body {
 .col-value {
   text-align: right;
   width: 90px;
+}
+
+/* --- My Roster tab --- */
+
+.col-slot {
+  width: 70px;
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  color: var(--flag);
+}
+
+.roster-row--empty td {
+  color: rgba(241, 237, 228, 0.3);
+}
+
+.roster-row__empty-label {
+  font-style: italic;
 }
 
 /* --- Position chips --- */

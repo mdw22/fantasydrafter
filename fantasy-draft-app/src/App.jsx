@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   STRATEGIES,
   DEFAULT_STRATEGY,
+  MAX_ROSTER_COUNTS,
   computeCurrentRound,
   computeRosterCounts,
   isPositionFull,
@@ -9,7 +10,16 @@ import {
 } from "./strategies";
 
 const POSITIONS = ["QB", "RB", "WR", "TE"];
-const TABS = ["ALL", ...POSITIONS];
+const ROSTER_SLOT_TAB = "MY ROSTER";
+const TABS = ["ALL", ...POSITIONS, ROSTER_SLOT_TAB];
+
+// Snake draft: exactly 13 opponent picks separate each of your turns. Used
+// only by the autodraft testing toggle, not a true positional simulator.
+const OPPONENT_PICKS_PER_ROUND = 13;
+
+const STARTING_SLOT_POSITIONS = ["QB", "RB", "RB", "WR", "WR", "TE"];
+const FLEX_ELIGIBLE = ["RB", "WR", "TE"];
+const BENCH_SLOT_COUNT = 7;
 
 // Persisted across reloads — a live draft can run long, and losing every
 // checked-off pick to an accidental refresh would be a real problem, not
@@ -81,6 +91,67 @@ function PlayerRow({ player, rankField, onDraft, onDraftMine }) {
   );
 }
 
+function RosterRow({ slotLabel, player }) {
+  return (
+    <tr className={player ? undefined : "roster-row--empty"}>
+      <td className="col-slot">{slotLabel}</td>
+      <td className="col-name">
+        {player ? (
+          <>
+            <PositionChip position={player.position} /> {player.player_display_name}
+          </>
+        ) : (
+          <span className="roster-row__empty-label">&mdash; empty &mdash;</span>
+        )}
+      </td>
+      <td className="col-num">{player ? player.projected_fantasy_points.toFixed(1) : "—"}</td>
+      <td className="col-num">{player ? player.vbd.toFixed(1) : "—"}</td>
+    </tr>
+  );
+}
+
+// Greedy display-only fill: best QB, best 2 RBs, best 2 WRs, best TE, best
+// remaining RB/WR/TE for FLEX, everything else to bench. Not a "start your
+// best lineup" optimizer (that's a weekly in-season concern) — just a way
+// to see what's filled vs. still needed at a glance mid-draft. DEF/K aren't
+// in the data at all, so they're omitted rather than shown as permanently
+// empty placeholders.
+function buildRosterSlots(players, myRosterIds) {
+  const mine = players.filter((p) => myRosterIds.has(p.player_id));
+  const used = new Set();
+
+  const takeBest = (position) => {
+    const best = mine
+      .filter((p) => p.position === position && !used.has(p.player_id))
+      .sort((a, b) => b.vbd - a.vbd)[0];
+    if (best) used.add(best.player_id);
+    return best ?? null;
+  };
+
+  const starters = STARTING_SLOT_POSITIONS.map((position) => takeBest(position));
+
+  const flex = mine
+    .filter((p) => FLEX_ELIGIBLE.includes(p.position) && !used.has(p.player_id))
+    .sort((a, b) => b.vbd - a.vbd)[0];
+  if (flex) used.add(flex.player_id);
+
+  const bench = mine.filter((p) => !used.has(p.player_id)).sort((a, b) => b.vbd - a.vbd);
+
+  return {
+    slots: [
+      { label: "QB", player: starters[0] },
+      { label: "RB1", player: starters[1] },
+      { label: "RB2", player: starters[2] },
+      { label: "WR1", player: starters[3] },
+      { label: "WR2", player: starters[4] },
+      { label: "TE", player: starters[5] },
+      { label: "FLEX", player: flex ?? null },
+    ],
+    bench,
+    benchSlotCount: Math.max(BENCH_SLOT_COUNT, bench.length),
+  };
+}
+
 function TierDivider({ tier }) {
   return (
     <tr className="tier-divider-row">
@@ -103,6 +174,7 @@ export default function App() {
   const [myRosterIds, setMyRosterIds] = useState(() => loadIdSet(MY_ROSTER_STORAGE_KEY));
   const [activeStrategy, setActiveStrategy] = useState(DEFAULT_STRATEGY);
   const [sortByStrategy, setSortByStrategy] = useState(false);
+  const [autodraftEnabled, setAutodraftEnabled] = useState(false);
 
   useEffect(() => {
     // Fetched from public/data/cheat_sheet.json at runtime — regenerate
@@ -133,7 +205,28 @@ export default function App() {
   // one click covers both, since most picks (13/14) are the plain "drafted
   // by someone else" case that only needs the former.
   const handleDraftMine = (playerId) => {
-    setDraftedIds((prev) => new Set(prev).add(playerId));
+    setDraftedIds((prevDrafted) => {
+      const nextDrafted = new Set(prevDrafted).add(playerId);
+      if (!autodraftEnabled || !players) return nextDrafted;
+
+      // Testing aid: fill the next 13 (one full round of opponents) with
+      // the highest-VBD player still available each time, no strategy
+      // involved. A fresh per-batch position tally (not your own roster
+      // counts) keeps one round from piling up e.g. 10 QBs in a row.
+      const batchCounts = { QB: 0, RB: 0, WR: 0, TE: 0 };
+      for (let i = 0; i < OPPONENT_PICKS_PER_ROUND; i++) {
+        const pick = players
+          .filter((p) => !nextDrafted.has(p.player_id))
+          .filter(
+            (p) => (batchCounts[p.position] ?? 0) < (MAX_ROSTER_COUNTS[p.position] ?? Infinity)
+          )
+          .sort((a, b) => b.vbd - a.vbd)[0];
+        if (!pick) break; // pool exhausted or every position capped this batch
+        nextDrafted.add(pick.player_id);
+        batchCounts[pick.position] = (batchCounts[pick.position] ?? 0) + 1;
+      }
+      return nextDrafted;
+    });
     setMyRosterIds((prev) => new Set(prev).add(playerId));
   };
 
@@ -182,8 +275,13 @@ export default function App() {
     return { top, alsoConsider };
   }, [scoredAvailable, rosterCounts]);
 
+  const rosterView = useMemo(() => {
+    if (!players) return null;
+    return buildRosterSlots(players, myRosterIds);
+  }, [players, myRosterIds]);
+
   const rows = useMemo(() => {
-    if (!players) return [];
+    if (!players || activeTab === ROSTER_SLOT_TAB) return [];
     if (activeTab === "ALL") {
       const sorted = [...scoredAvailable];
       if (sortByStrategy) {
@@ -240,6 +338,14 @@ export default function App() {
               ))}
             </select>
           </div>
+          <label className="autodraft-toggle">
+            <input
+              type="checkbox"
+              checked={autodraftEnabled}
+              onChange={(e) => setAutodraftEnabled(e.target.checked)}
+            />
+            Autodraft (testing)
+          </label>
           {recommendation ? (
             <div className="recommendation-panel__pick">
               <span className="recommendation-panel__label">Recommended:</span>
@@ -314,7 +420,33 @@ export default function App() {
           </div>
         )}
 
-        {!error && players && (
+        {!error && players && activeTab === ROSTER_SLOT_TAB && (
+          <table className="board-table roster-table">
+            <thead>
+              <tr>
+                <th className="col-slot">Slot</th>
+                <th className="col-name">Player</th>
+                <th className="col-num">Proj</th>
+                <th className="col-num">VBD</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rosterView.slots.map((slot) => (
+                <RosterRow key={slot.label} slotLabel={slot.label} player={slot.player} />
+              ))}
+              {Array.from({ length: rosterView.benchSlotCount }, (_, i) => (
+                <RosterRow
+                  key={`bench-${i}`}
+                  slotLabel={`BENCH ${i + 1}`}
+                  player={rosterView.bench[i] ?? null}
+                />
+              ))}
+              <RosterRow slotLabel="IR" player={null} />
+            </tbody>
+          </table>
+        )}
+
+        {!error && players && activeTab !== ROSTER_SLOT_TAB && (
           <table className="board-table">
             <thead>
               <tr>

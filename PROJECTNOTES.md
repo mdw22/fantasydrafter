@@ -367,6 +367,41 @@ most picks in a 14-team draft aren't yours).
   localStorage persistence across reload, and Reset clearing both
   `draftedIds` and `myRosterIds`. No console errors.
 
+### Autodraft toggle (testing) + My Roster tab
+
+Two more additions on top of the above, in `App.jsx`.
+
+- **Autodraft toggle**: a checkbox next to the strategy selector, off by
+  default, no effect on existing behavior when off. When on, each ★
+  ("mine") pick is followed by 13 auto-picks (one full round of
+  opponents — hardcoded to the 14-team league size, not a true
+  snake-position simulator) added straight to `draftedIds` (never
+  `myRosterIds`), each the highest-raw-VBD player still available, no
+  strategy scoring involved. Implemented inside `handleDraftMine`'s
+  `setDraftedIds` updater so all 14 changes land in one state update /
+  one re-render. Still respects `MAX_ROSTER_COUNTS` from `strategies.js`
+  via a **fresh per-batch position tally** (not your own roster counts)
+  so one round can't pile up e.g. 10 QBs in a row; stops early
+  (gracefully, no error) if the pool runs out or every remaining
+  position is capped for that batch. Verified via Playwright, including
+  both edge cases directly (small-pool exhaustion mid-batch, and a
+  same-position-only pool where the cap — not pool exhaustion — is what
+  stops the batch early).
+- **My Roster tab**: added as a 6th tab (`ALL/QB/RB/WR/TE/MY ROSTER`)
+  rather than a separate panel, reusing the existing tab mechanism. Shows
+  your ★ picks in a greedy display-only slot fill (`buildRosterSlots()`):
+  best QB, best 2 RB, best 2 WR, best TE, best remaining RB/WR/TE for
+  FLEX, everything else to bench (padded to 7 slots, or more if you
+  somehow draft beyond that — not silently dropped), plus an always-empty
+  IR row. DEF/K aren't in the data at all so they're omitted entirely,
+  not shown as permanently-empty rows. Empty slots render as "— empty —"
+  rather than being omitted, since seeing what's still needed mid-draft
+  is the point. The "Sort by strategy" toggle is disabled on this tab
+  (same as the position tabs) since it only ever affected the ALL tab.
+  Skipped the optional summary-line nice-to-have (total starter
+  points) — the design doc flagged it as droppable if it added
+  complexity, and the slot list alone covers the actual ask.
+
 ## Where things stand (session handoff)
 
 Everything below is committed and pushed to `main` — working tree clean,
