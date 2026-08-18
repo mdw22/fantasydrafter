@@ -54,6 +54,70 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* --- Recommendation panel --- */
+
+.recommendation-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  background: var(--field-deep);
+  border: 2px solid var(--flag);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.recommendation-panel__strategy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(241, 237, 228, 0.7);
+}
+
+.recommendation-panel__strategy select {
+  background: var(--field);
+  color: var(--chalk);
+  border: 1px solid var(--hash);
+  padding: 4px 8px;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+}
+
+.recommendation-panel__pick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-family: var(--font-body);
+}
+
+.recommendation-panel__label {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  color: var(--flag);
+  text-transform: uppercase;
+}
+
+.recommendation-panel__name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.recommendation-panel__also {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(241, 237, 228, 0.6);
+}
+
+.recommendation-panel__pick--empty {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: rgba(241, 237, 228, 0.5);
+}
+
 /* --- Tabs --- */
 
 .tabs {
@@ -94,12 +158,39 @@ body {
   flex: 1;
 }
 
-.drafted-count {
+.drafted-count,
+.mine-count {
   align-self: center;
   font-family: var(--font-mono);
   font-size: 0.8rem;
   color: rgba(241, 237, 228, 0.6);
   white-space: nowrap;
+}
+
+.mine-count {
+  color: var(--flag);
+}
+
+.sort-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(241, 237, 228, 0.7);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sort-toggle input {
+  accent-color: var(--flag);
+  cursor: pointer;
+}
+
+.sort-toggle:has(input:disabled) {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .tab--reset {
@@ -151,7 +242,8 @@ body {
   font-size: 0.9rem;
 }
 
-.col-draft {
+.col-draft,
+.col-mine {
   width: 32px;
   text-align: center;
 }
@@ -161,6 +253,30 @@ body {
   height: 16px;
   accent-color: var(--flag);
   cursor: pointer;
+}
+
+.mine-button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(241, 237, 228, 0.25);
+  border-radius: 3px;
+  color: rgba(241, 237, 228, 0.4);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.mine-button:hover {
+  color: var(--flag);
+  border-color: var(--flag);
+}
+
+.mine-button:focus-visible {
+  outline: 2px solid var(--flag);
+  outline-offset: 1px;
 }
 
 .col-rank {

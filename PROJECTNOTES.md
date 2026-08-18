@@ -318,10 +318,54 @@ which wasn't true before).
 Requirements → projection model (**done, backtested + grid-search
 tuned**) → cheat sheet (VBD/tiers, **done**) → React UI (**done,
 functional, includes manual pick tracking**) → live draft assistant
-(**manual pick tracking done**; roster-needs tracking / best-available
-recommendations / positional scarcity alerts not started) → ESPN
+(**manual pick tracking done, including which picks are yours; Robust RB
+strategy recommendation done** — see "Draft Strategy Recommendations"
+below; positional scarcity alerts beyond Robust RB not started) → ESPN
 auto-sync (**tabled until after this season's draft** — see "ESPN Live
 Draft Sync — Design Notes" below).
+
+## Draft Strategy Recommendations (Robust RB v1)
+
+Built in `fantasy-draft-app/src/strategies.js` + wired into `App.jsx`.
+Extends manual pick tracking with a second, separate action per row: the
+existing checkbox still means "drafted by someone else" (just removes
+from the pool); a new star button means "drafted by me" (removes from
+the pool AND adds to your roster — one click for the common case, since
+most picks in a 14-team draft aren't yours).
+
+- **Roster state**: `myRosterIds` (a second localStorage-persisted Set,
+  separate from `draftedIds`) tracks your own picks specifically.
+  `computeRosterCounts()` derives your position counts from it.
+- **Current round**: derived from total picks made so far
+  (`Math.floor(draftedIds.size / 14) + 1`) — no separate round input to
+  keep in sync.
+- **Robust RB scoring**: `TARGET_RB_COUNT=3`, `RB_BOOST_MULTIPLIER=1.35`,
+  `BOOST_TAPER_START_ROUND=6` (all tunable in `strategies.js`) — boosts
+  RB's VBD until your roster hits the target, tapering the boost off
+  after round 6 so it doesn't force a late-round reach.
+- **`MAX_ROSTER_COUNTS`** (QB:3, RB:6, WR:6, TE:3, also in
+  `strategies.js`): a separate, strategy-agnostic soft cap — stops
+  recommending a position once your roster is already deep at it,
+  regardless of which strategy is active. Not roster-slot-exact (FLEX/
+  bench blur the line), deliberately generous.
+- **Strategies are registered in a `STRATEGIES` lookup** keyed by id →
+  `{ label, score }`, so the UI's strategy `<select>` and future
+  strategies (Zero RB, Hero RB, Balanced) just add an entry — no
+  restructuring needed. Only Robust RB is registered today.
+- **Recommended Pick callout**: shows the top-scoring available player
+  under the active strategy (excluding positions already at
+  `MAX_ROSTER_COUNTS`). If the strategy pick differs from the top player
+  by raw VBD, shows both ("also consider: ...") so the BPA option stays
+  visible alongside the strategy nudge.
+- **Sort-by-strategy toggle**: re-sorts the ALL tab by strategy score
+  instead of raw VBD when checked. Disabled on position tabs — those
+  stay sorted by `position_rank` regardless, since tiers are a
+  position-scoped concept the toggle deliberately doesn't touch.
+- Verified with a scripted Playwright pass: mine-vs-theirs tracking,
+  roster-count-driven target-met fallback (boost turns off exactly at
+  3 RBs), sort-toggle reordering while the boost is active, tab-scoping,
+  localStorage persistence across reload, and Reset clearing both
+  `draftedIds` and `myRosterIds`. No console errors.
 
 ## Where things stand (session handoff)
 
