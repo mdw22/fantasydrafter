@@ -681,7 +681,7 @@ below).
 
 Built in `fantasy-draft-app/src/strategies.js` + wired into `App.jsx`.
 Extends manual pick tracking with a second, separate action per row: the
-existing checkbox still means "drafted by someone else" (just removes
+existing name-click still means "drafted by someone else" (just removes
 from the pool); a new star button means "drafted by me" (removes from
 the pool AND adds to your roster — one click for the common case, since
 most picks in a 14-team draft aren't yours).
@@ -846,6 +846,37 @@ manual sync needed). `computeDraftGrade()` in `App.jsx`:
 
 ### Small UI fixes (undocumented at the time, noted here after the fact)
 
+- **Dark-mode palette deepened**: `--field`/`--field-deep` darkened toward
+  near-black (was a fairly saturated forest green — too light for
+  standard dark-mode contrast); `--hash` replaced with a muted
+  sage-green tone for secondary text/borders that still reads clearly
+  against the darker background. Chip colors, flag gold, and alert red
+  left unchanged — already worked in dark mode.
+- **Drafted-by-other checkbox replaced with clicking the player name**:
+  the checkbox column was removed entirely; clicking a player's name now
+  marks them drafted by someone else (same effect the checkbox had),
+  while the ★ button still marks a pick as yours. The name is a real
+  `<button>` now (keyboard-accessible via Tab + Enter/Space, with a
+  hover/focus affordance) instead of a plain text cell. (References
+  elsewhere in this doc have been updated to say "name-click" instead of
+  "checkbox" for this action — the "Autodraft toggle" checkbox below is
+  an unrelated, still-real `<input type="checkbox">`.)
+- **Header restructured into two rows, grouped by function**: the single
+  crowded row (tabs + sort toggle + drafted/roster counts + Reset) was
+  splitting navigation and controls with unrelated priorities across the
+  same line. Now tabs get their own row; a second `.draft-controls` row
+  holds sort toggle (left), drafted/roster status (center), and Reset
+  (right). Reset restyled to a quieter standalone look (relies on the
+  existing `--alert` red border/text to read as destructive, rather than
+  reusing the bold tab styling for emphasis). Drafted/roster counts both
+  de-emphasized with `--hash` (matching how rank numbers already read as
+  secondary) — dropped the roster count's previous gold highlight, which
+  was competing with the gold "Recommended:" callout for attention.
+  Position chip colors (`--pos-qb/rb/wr/te`) centralized into CSS custom
+  properties in the same pass, replacing hardcoded hex values scattered
+  across the stylesheet — same colors, one place to change them later
+  (the K/DEF chip colors added afterward, see "Kicker + Defense" above,
+  followed this same pattern from the start).
 - **"Recommended:" no longer shifts for a long player name**: Strategy
   select + Autodraft toggle moved to their own row, separate from the
   recommended-pick row (`.recommendation-panel__controls` /
@@ -964,8 +995,8 @@ nothing local-only except gitignored secrets (see the ESPN section).
   at its prior value (0.1) rather than chase noise. LOOKBACK_SEASONS
   left at its original default (5) — the search signal for it was noisy
   across windows, not worth chasing.
-- **App**: manual pick tracking works — checkbox removes a player from
-  the board, Reset (with a confirm dialog) brings everyone back,
+- **App**: manual pick tracking works — clicking a player's name removes
+  them from the board, Reset (with a confirm dialog) brings everyone back,
   localStorage-persisted so a reload mid-draft doesn't lose picks.
   Verified with a scripted Playwright pass (screenshots + console-error
   check), not just by reading the code.
@@ -1088,7 +1119,8 @@ the draft.
 ## Recommendation
 
 **Current status: tabled until after this season's draft** — manual
-entry (Option C) is built and in use (the checkbox + Reset UI in the
+entry (Option C) is built and in use (click-name-to-mark-drafted +
+  Reset UI in the
 React app). The plan below is for if/when this gets revisited.
 
 1. ~~Test Option A first~~ — **done, twice, negative result for mock

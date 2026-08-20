@@ -109,8 +109,48 @@ function robustRBScore(player, rosterCounts, currentRound) {
   return player.vbd * taperedMultiplier(floor.multiplier, currentRound);
 }
 
+// --- Hero RB ---
+// Opposite shape from Robust RB at RB specifically: grab exactly ONE elite
+// RB early (boost), then actively avoid a 2nd/3rd RB for a long stretch
+// (suppress) so that draft capital goes to WR/TE instead (boost), before
+// RB returns to neutral/raw VBD late for cheap depth and handcuffs.
+
+const TARGET_HERO_RB_COUNT = 1;
+const HERO_RB_BOOST_MULTIPLIER = 1.45; // higher than Robust RB's 1.35 — missing the one hero RB is this strategy's single biggest risk
+const HERO_RB_MIN_TIER = 2; // quality floor — only an elite/near-elite RB qualifies as "the hero pick"; a mediocre RB1 shouldn't get boosted into looking like a priority
+
+const RB_SUPPRESSION_MULTIPLIER = 0.7; // actively discourage RB #2+ during the pivot window — the strategy working as intended, not a bug, so no quality floor here
+const RB_SUPPRESSION_END_ROUND = 10; // pivot window ends here; RB scoring returns to neutral (raw VBD) after this round
+
+const WR_PIVOT_BOOST_MULTIPLIER = 1.3; // slightly stronger than Robust RB's WR floor — Hero RB leans harder into WR specifically
+const TE_PIVOT_BOOST_MULTIPLIER = 1.1; // smaller than WR's — real Hero RB builds lean WR much harder than TE
+const MAX_TIER_FOR_BOOST = 4; // quality floor for the WR/TE pivot boost — reuses Robust RB's established value
+
+function heroRBScore(player, rosterCounts, currentRound) {
+  const rbCount = rosterCounts.RB ?? 0;
+  const inPivotWindow = rbCount >= TARGET_HERO_RB_COUNT && currentRound <= RB_SUPPRESSION_END_ROUND;
+
+  if (player.position === "RB") {
+    if (rbCount < TARGET_HERO_RB_COUNT) {
+      // The hero pick itself — only an elite/near-elite RB earns the boost.
+      if (player.tier <= HERO_RB_MIN_TIER) return player.vbd * HERO_RB_BOOST_MULTIPLIER;
+      return player.vbd;
+    }
+    if (inPivotWindow) return player.vbd * RB_SUPPRESSION_MULTIPLIER;
+    return player.vbd; // past the pivot window — cheap late RB depth/handcuffs are fine again
+  }
+
+  if (inPivotWindow && player.tier <= MAX_TIER_FOR_BOOST) {
+    if (player.position === "WR") return player.vbd * WR_PIVOT_BOOST_MULTIPLIER;
+    if (player.position === "TE") return player.vbd * TE_PIVOT_BOOST_MULTIPLIER;
+  }
+
+  return crossPositionValue(player);
+}
+
 export const STRATEGIES = {
   robustRB: { label: "Robust RB", score: robustRBScore },
+  heroRB: { label: "Hero RB", score: heroRBScore },
 };
 
 export const DEFAULT_STRATEGY = "robustRB";
