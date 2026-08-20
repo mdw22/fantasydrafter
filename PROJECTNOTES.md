@@ -333,12 +333,22 @@ undiscounted VBD and tiers among themselves:
   don't have a K yet — grab one now"). If only one of DEF/K is missing
   (e.g. you drafted one manually earlier), it forces that one
   specifically rather than comparing against the one you already have.
-  This is a targeted override on top of the recommendation callout
-  only — it does NOT touch the "Sort by strategy" board ordering, which
-  still uses the full late-round suppression everywhere. Verified: at
-  14/16 with neither drafted, forces the higher-VBD one of the two; at
-  15/16 with the other still missing, forces that one; with only K
-  missing (DEF drafted earlier), forces K specifically, not DEF.
+  **Real bug found and fixed right after shipping this**: it was
+  originally scoped to the "Recommended:" callout only, NOT the "Sort
+  by strategy" board ordering — but "sort by strategy + always pick the
+  top of the list" (the user's actual workflow, not reading the callout
+  text) is a completely separate code path in `rows`' useMemo that never
+  got the same override. Without it, that workflow kept drafting skill
+  players all the way to the `MAX_ROSTER_COUNTS` sum (16 skill picks)
+  before DEF/K ever surfaced, landing them at picks 17-18 instead of
+  15-16 — confirmed by the user hitting exactly this in a real
+  playthrough. Fixed by applying the identical missing-DEF/K check
+  inside the `sortByStrategy` sort comparator too, floating missing
+  DEF/K to the very top (ahead of even a boosted RB/WR score) once the
+  same 14+-roster-size condition is met. Re-verified end-to-end using
+  the user's exact reported workflow (sort-by-strategy + autodraft +
+  always click top of list, no reference to the callout at all): pick
+  15 = K, pick 16 = DEF, final roster has exactly 1 of each.
 
 ### React app additions
 

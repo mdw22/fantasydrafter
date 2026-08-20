@@ -386,6 +386,18 @@ export default function App() {
     if (activeTab === "ALL") {
       const sorted = [...scoredAvailable];
       if (sortByStrategy) {
+        // Same forced-DEF/K override as the Recommended Pick callout
+        // (see the `recommendation` useMemo) — without this, "sort by
+        // strategy + pick the top of the list" never surfaces DEF/K at
+        // all until every skill position hits its MAX_ROSTER_COUNTS cap
+        // (up to 16 skill picks), landing them 2 picks later than
+        // intended. Missing DEF/K float to the very top when this fires,
+        // ahead of even a boosted RB/WR score.
+        const missingLatePositions =
+          myRosterIds.size >= FULL_ROSTER_SIZE - 2
+            ? new Set(["DEF", "K"].filter((pos) => (rosterCounts[pos] ?? 0) === 0))
+            : new Set();
+
         // Capped positions (MAX_ROSTER_COUNTS) sink below everything still
         // eligible, same as the Recommended Pick callout already does —
         // otherwise a capped position with less-negative VBD than what's
@@ -393,6 +405,10 @@ export default function App() {
         // top of "best remaining" even though the strategy has no more use
         // for it, undermining the whole point of sorting by strategy.
         sorted.sort((a, b) => {
+          const aMissing = missingLatePositions.has(a.position);
+          const bMissing = missingLatePositions.has(b.position);
+          if (aMissing !== bMissing) return aMissing ? -1 : 1;
+
           const aFull = isPositionFull(a.position, rosterCounts);
           const bFull = isPositionFull(b.position, rosterCounts);
           if (aFull !== bFull) return aFull ? 1 : -1;
@@ -406,7 +422,7 @@ export default function App() {
     return scoredAvailable
       .filter((p) => p.position === activeTab)
       .sort((a, b) => a.position_rank - b.position_rank);
-  }, [players, activeTab, scoredAvailable, sortByStrategy, rosterCounts]);
+  }, [players, activeTab, scoredAvailable, sortByStrategy, rosterCounts, myRosterIds]);
 
   // Group by tier only for a single-position view — tiers are computed
   // within each position, so a "Tier 1" QB and a "Tier 1" RB aren't
