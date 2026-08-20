@@ -56,7 +56,6 @@ from lib.config import (
     AGE_CURVES,
     AGE_TREND_DAMPENING,
     TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
-    QB_RUSHING_YARDS_WEIGHT,
     QB_RUSHING_EMPHASIS_STRENGTH,
     TARGET_SHARE_ADJUSTMENT_STRENGTH,
 )
@@ -80,12 +79,11 @@ def load_year_context(season_summary: pl.DataFrame, year: int) -> dict:
     score_year — kept independent of the player-level search so
     grid_search.py's LOOKBACK_SEASONS/DECAY stage doesn't inadvertently
     also move these team/usage-level signals; only their own *_STRENGTH
-    knobs are meant to be tuned per-call. QB rushing emphasis is the
-    exception — load_qb_rushing_emphasis has no network call (reads
-    directly from season_summary, already loaded), so it's cheap enough
-    to recompute per grid point and IS allowed to vary with
-    qb_rushing_yards_weight in build_backtest_projection instead of
-    being cached here.
+    knobs are meant to be tuned per-call. QB rushing emphasis is cheap
+    enough (load_qb_rushing_emphasis has no network call — reads
+    directly from season_summary, already loaded) that it's just
+    recomputed fresh in build_backtest_projection instead of being
+    cached here.
     """
     player_teams = load_player_teams(year)
     return {
@@ -108,7 +106,6 @@ def build_backtest_projection(
     age_curves: dict = AGE_CURVES,
     age_trend_dampening: float = AGE_TREND_DAMPENING,
     team_offense_adjustment_strength: float = TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
-    qb_rushing_yards_weight: float = QB_RUSHING_YARDS_WEIGHT,
     qb_rushing_emphasis_strength: float = QB_RUSHING_EMPHASIS_STRENGTH,
     target_share_adjustment_strength: float = TARGET_SHARE_ADJUSTMENT_STRENGTH,
     verbose: bool = True,
@@ -119,16 +116,16 @@ def build_backtest_projection(
     steps (minus ADP proxy, which needs no validation here).
 
     lookback_seasons/decay/age_curves/age_trend_dampening/
-    team_offense_adjustment_strength/qb_rushing_yards_weight/
-    qb_rushing_emphasis_strength/target_share_adjustment_strength default
-    to module-level config but can be overridden — used by
-    bin/grid_search.py to test alternate values. verbose=False silences
-    the per-call roster-status drop count, which would otherwise print
-    once per grid point across a search.
+    team_offense_adjustment_strength/qb_rushing_emphasis_strength/
+    target_share_adjustment_strength default to module-level config but
+    can be overridden — used by bin/grid_search.py to test alternate
+    values. verbose=False silences the per-call roster-status drop
+    count, which would otherwise print once per grid point across a
+    search.
 
     qb_rushing_emphasis is recomputed here (not cached in year_context)
-    since it has no network call and needs to vary with
-    qb_rushing_yards_weight during a search.
+    since it has no network call — cheap enough to just rebuild fresh
+    each call.
     """
     projections = recency_weighted_projection(season_summary, year, lookback_seasons, decay)
     projections = apply_age_adjustment(projections, year_context["ages"], age_curves, age_trend_dampening)
@@ -144,7 +141,7 @@ def build_backtest_projection(
         team_offense_adjustment_strength,
     )
 
-    qb_yards = load_qb_rushing_emphasis(season_summary, year, lookback_seasons, decay, qb_rushing_yards_weight)
+    qb_yards = load_qb_rushing_emphasis(season_summary, year, lookback_seasons, decay)
     projections = apply_qb_rushing_emphasis(projections, qb_yards, qb_rushing_emphasis_strength)
 
     projections = apply_target_share_adjustment(

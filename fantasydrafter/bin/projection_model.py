@@ -32,7 +32,6 @@ from lib.config import (
     AGE_CURVES,
     AGE_TREND_DAMPENING,
     TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
-    QB_RUSHING_YARDS_WEIGHT,
     QB_RUSHING_EMPHASIS_STRENGTH,
     TARGET_SHARE_ADJUSTMENT_STRENGTH,
     evidence_based_age_adjustment,
@@ -500,18 +499,27 @@ def load_qb_rushing_emphasis(
     current_season: int,
     lookback_seasons: int = LOOKBACK_SEASONS,
     decay: float = DECAY,
-    rushing_weight: float = QB_RUSHING_YARDS_WEIGHT,
 ) -> pl.DataFrame:
     """
-    Each QB's recency-weighted "emphasized yards" (passing_yards +
-    rushing_weight x rushing_yards), UNNORMALIZED — see
+    Each QB's recency-weighted rushing yards, UNNORMALIZED — see
     QB_RUSHING_EMPHASIS_STRENGTH in config.py for why. Ratio-to-position-
     average is computed later in apply_qb_rushing_emphasis, against the
     currently-relevant player pool rather than this whole historical
     universe.
 
+    REAL BUG FIXED (Goff/Barkley/Evans diagnostic — see PROJECTNOTES.md):
+    this used to be "passing_yards + WEIGHT x rushing_yards", which was
+    dominated by passing_yards for any high-volume passer — a pure
+    pocket passer in a big-volume offense got nearly as much "rushing
+    emphasis" credit as an actual dual-threat QB, double-counting yards
+    already earned via passing. Rushing yards alone, with no weight
+    multiplier — a constant multiplier on the only term in the ratio
+    would cancel out against the (equally scaled) position-average
+    baseline anyway, so there was nothing left to tune there once
+    passing_yards was removed.
+
     Same seasons-ago / weight formula as recency_weighted_projection,
-    just applied to passing/rushing yards instead of fantasy points.
+    just applied to rushing yards instead of fantasy points.
     """
     history = season_summary.filter(
         (pl.col("season") < current_season) & (pl.col("position") == "QB")
@@ -523,9 +531,7 @@ def load_qb_rushing_emphasis(
     history = history.with_columns(
         (pl.lit(decay) ** pl.col("seasons_ago")).alias("weight")
     )
-    history = history.with_columns(
-        (pl.col("passing_yards") + rushing_weight * pl.col("rushing_yards")).alias("emphasized_yards")
-    )
+    history = history.with_columns(pl.col("rushing_yards").alias("emphasized_yards"))
 
     weighted = history.group_by("player_id").agg(
         (

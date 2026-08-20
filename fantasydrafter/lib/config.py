@@ -112,13 +112,40 @@ MAX_GAMES = 17
 # current values. Result: it STILL hugs the edge of that range for
 # RB/TE (found 21, the grid's minimum) even with the walking bug fixed —
 # a second, independent sign of overfitting a small sample, not a
-# genuine converged optimum. Not applying that result. Leaving these
-# values as previously applied (above) rather than reverting to the
-# original domain-knowledge numbers either, absent a clearer signal
-# either way — but treat this whole knob as low-confidence until there's
-# more backtest data to work with.
+# genuine converged optimum.
+#
+# REVERTED RB ONLY to the original domain-knowledge value (Goff/
+# Barkley/Evans diagnostic). Both RB and WR's retuned curves were
+# initially confirmed as the dominant driver of a named-player
+# complaint (Barkley RB14, Evans too-low-among-WRs) — recomputed both
+# directly with evidence_based_age_adjustment() under old vs. new
+# curves: Barkley's age_adjustment_factor was 0.632 under the retuned
+# curve vs. 0.857 under the original (RB14 -> RB5); Evans was 0.548 vs.
+# 0.849 (WR63 -> WR44). But a full backtest rerun after reverting BOTH
+# showed a real, asymmetric cost: WR rank correlation got WORSE in
+# every single one of the 5 backtest years tested (mean -0.0084) after
+# reverting WR, while RB's cost was smaller and mixed (2 of 5 years
+# improved, mean -0.0046). Discussed directly: WR was reverted back to
+# the grid-search value (kept at 25/0.06) since the broad, consistent
+# WR cost outweighs fixing one outlier case — Evans (33 years old,
+# still productive) stays under-projected, documented as a known
+# accepted limitation rather than a fixed bug (very old but still-
+# elite WRs are rare in a 5-year sample, so the model doesn't have much
+# to learn this pattern from). RB was kept reverted since its backtest
+# cost was smaller and split roughly evenly across years, a more
+# defensible tradeoff for fixing a confirmed real complaint. See
+# PROJECTNOTES.md for the full before/after numbers this decision was
+# based on.
+#
+# TE is DELIBERATELY left at the grid-search-retuned value (25, 0.06)
+# too — the diagnostic never gathered direct evidence for TE at all.
+# QB was never touched by any of this (its own backtest signal was
+# always weak either way).
+#
+# Treat RB as reverted-and-validated; WR and TE both stay at the
+# grid-search values, low-confidence pending their own evidence.
 AGE_CURVES = {
-    "RB": (23, 0.06),
+    "RB": (27, 0.06),
     "WR": (25, 0.06),
     "TE": (25, 0.06),
     "QB": (32, 0.02),
@@ -150,14 +177,24 @@ def age_adjustment_factor(
 # their own recent performance doesn't show it, the discount shouldn't be
 # as severe as for someone who has visibly already declined.
 #
-# Was 0.5 (picked to fix that specific case). bin/grid_search.py
-# backtested against 2021-2025 actual results and found ~0.1 consistently
-# scores better — i.e. the age curve itself (now lower peak ages, see
-# AGE_CURVES) should mostly do the work, with less further dampening on
-# top. This trades away some of the safety margin the original 0.5 gave
-# specific cases like Henry/Barkley in exchange for better average
-# accuracy — worth watching for regressions on similar "still performing
-# despite age" players, and re-running the grid search each future season.
+# Was 0.5 (picked to fix that specific case), then 0.1 (bin/grid_search.py
+# against 2021-2025). Re-validated after the Goff/Barkley/Evans
+# diagnostic's AGE_CURVES changes, since the two knobs interact — but
+# the result turned out to be GENUINELY UNSTABLE, not just marginal:
+# re-running the search against three slightly different AGE_CURVES
+# combinations during this investigation found the "winner" flip
+# between 0.0 and 0.2 each time, with every candidate value across the
+# whole 0.0-0.2 range scoring within ~0.0006 of each other (noise-level
+# — nowhere near the ~0.012 swing that justified the original 0.5->0.1
+# move). Concluded this knob just isn't well-determined by the current
+# 5-year sample once AGE_CURVES itself changes, and kept the prior
+# validated value (0.1) rather than chase whichever way the noise
+# happened to point on a given run. This re-check also surfaced and
+# fixed a real bug in grid_search.py: its "unfiltered" search objective
+# was silently including K in the optimization target (K/DEF rows exist
+# in season_summary now but this whole search predates that, and K
+# isn't even affected by this knob — it's not in AGE_CURVES) — fixed by
+# filtering to QB/RB/WR/TE in evaluate() (bin/grid_search.py).
 AGE_TREND_DAMPENING = 0.1
  
  
@@ -223,8 +260,7 @@ TEAM_OFFENSE_ADJUSTMENT_STRENGTH = 0.3
 # QB rushing emphasis
 # ---------------------------------------------------------------------------
 #
-# QBs get boosted/discounted by their own recency-weighted "emphasized
-# yards" (passing_yards + QB_RUSHING_YARDS_WEIGHT x rushing_yards)
+# QBs get boosted/discounted by their own recency-weighted rushing yards
 # relative to the QB position average. QB rushing production (yardage,
 # and the much easier goal-line rushing TDs it creates) is what actually
 # separates a true fantasy QB1 from a similarly-talented pure pocket
@@ -236,20 +272,42 @@ TEAM_OFFENSE_ADJUSTMENT_STRENGTH = 0.3
 # this is a deliberate EXTRA emphasis on top of that, not just
 # re-counting the same points twice.
 #
-# QB_RUSHING_YARDS_WEIGHT: how many "passing-yard-equivalents" one
-# rushing yard counts as for this signal only (does not touch actual
-# scoring — see SCORING in compute_fantasy_points.py for real league
-# rules). QB_RUSHING_EMPHASIS_STRENGTH: 0 = no effect, 1 = full
-# pass-through of the resulting ratio.
+# QB_RUSHING_EMPHASIS_STRENGTH: 0 = no effect, 1 = full pass-through of
+# the rushing-yards-vs-position-average ratio.
 #
-# Confirmed by bin/grid_search.py (Stage 5, searched jointly): weight
-# moved from an initial 2.5 guess to 3.0, strength confirmed at the
-# initial 0.3 guess. This landed on a genuine interior optimum, not a
-# search-grid-boundary artifact (4.0 was tested and lost to 3.0) — a
-# more confident finding than the AGE_CURVES stage, similar confidence
-# to TEAM_OFFENSE_ADJUSTMENT_STRENGTH.
-QB_RUSHING_YARDS_WEIGHT = 3.0
-QB_RUSHING_EMPHASIS_STRENGTH = 0.3
+# REAL BUG FOUND AND FIXED (Goff/Barkley/Evans diagnostic): this signal
+# originally used "emphasized_yards = passing_yards + WEIGHT x
+# rushing_yards", which was dominated by passing_yards for any high-
+# volume passer, rushing or not — Jared Goff's weighted emphasized
+# yards (~4,718, nearly all passing) came out comparable to or higher
+# than genuine dual-threat QBs like Lamar Jackson (~4,709) or Josh
+# Allen, giving a pure pocket passer in a high-volume offense nearly as
+# much "rushing emphasis" credit as an actual rushing QB — a real
+# double-count against points already earned via passing volume, and
+# the direct cause of Goff ranking QB4. Fixed to use rushing_yards
+# ALONE. The old WEIGHT knob (previously 3.0, grid-searched) is gone
+# entirely, not just left at a stale value — it's mathematically inert
+# now: since it was the only term multiplied into the ratio and the
+# position-average baseline is computed from the same (equally scaled)
+# values, any constant multiplier cancels out of the ratio exactly
+# (verified empirically: ratios were byte-identical for weight=1, 3,
+# and 10 after the fix). Confirmed the new formula actually
+# differentiates correctly: Allen's factor moved to ~1.50 (a real
+# reward for legitimate rushing volume) while Goff's dropped to ~0.77
+# (correctly, no longer rewarded for pure passing volume).
+#
+# STRENGTH re-tuned via bin/grid_search.py after this fix, confirming
+# the pre-fix value (0.3) was no longer appropriate: the new rushing-
+# only ratio has a much wider spread than the old volume-blended one
+# (e.g. Josh Allen's ratio came out at ~2.68x position average, vs.
+# modest volume-based spreads under the old formula), so the same
+# strength multiplier now swings the adjustment much harder than
+# before. Search found 0.05 — a real, clearly-evidenced move down from
+# 0.3 (mean_rank_correlation(QB) improved from the search's tested
+# values monotonically down to 0.05 with nothing beyond it doing
+# better), not a marginal/noise-level change like AGE_TREND_DAMPENING
+# above.
+QB_RUSHING_EMPHASIS_STRENGTH = 0.05
 
 
 # ---------------------------------------------------------------------------

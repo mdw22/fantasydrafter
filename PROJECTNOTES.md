@@ -107,6 +107,14 @@ until there's more backtest data**, and don't trust a future
 couple of windows — as this episode showed, a methodology bug can look
 consistent too.
 
+**UPDATE**: RB's grid-search-retuned value has since been reverted back
+to the original domain-knowledge curve (27, 0.06) — this low-confidence
+flag turned out to be justified, not just theoretical caution. See
+"Projection accuracy diagnostic + fixes" below for the full story
+(confirmed via a named-player complaint, validated with a full backtest
+rerun). WR and TE remain at the grid-search values, still flagged
+low-confidence exactly as before.
+
 ## Team offense adjustment
 
 Players on a higher-volume offense (more total yards/game — passing +
@@ -142,16 +150,22 @@ differentiator.
 
 - **QB rushing emphasis** (`load_qb_rushing_emphasis`/
   `apply_qb_rushing_emphasis` in `projection_model.py`): each QB's
-  recency-weighted "emphasized yards" (`passing_yards +
-  QB_RUSHING_YARDS_WEIGHT x rushing_yards`) relative to the QB position
+  recency-weighted rushing production relative to the QB position
   average, applied as a multiplicative boost/discount on top of
   projected_fantasy_points. Deliberately an EXTRA emphasis, not
   re-counting points already earned — rushing yards already count
   toward a QB's historical fantasy points the same as everyone else's.
-  `QB_RUSHING_YARDS_WEIGHT=3.0` (grid-searched, moved from an initial
-  2.5 guess — a genuine interior optimum, 4.0 was tested and lost),
-  `QB_RUSHING_EMPHASIS_STRENGTH=0.3` (grid-searched, confirmed initial
-  guess).
+  **UPDATE — real bug found and fixed (Goff diagnostic)**: this
+  originally summed `passing_yards + QB_RUSHING_YARDS_WEIGHT x
+  rushing_yards`, which was dominated by `passing_yards` for any
+  high-volume passer regardless of actual rushing — a pure pocket
+  passer in a big-volume offense (Jared Goff) got nearly as much
+  "rushing emphasis" credit as a real dual-threat QB, double-counting
+  yards already earned via passing. Fixed to use `rushing_yards` alone;
+  `QB_RUSHING_YARDS_WEIGHT` no longer exists (mathematically inert once
+  passing_yards was removed — see "Projection accuracy diagnostic +
+  fixes" below for the full writeup and the re-tuned
+  `QB_RUSHING_EMPHASIS_STRENGTH=0.05`, down from 0.3).
 - **Target share adjustment** (`load_target_share`/
   `apply_target_share_adjustment`): each RB/WR/TE's recency-weighted
   share of their team's total targets, relative to the position average
@@ -197,18 +211,17 @@ dropped from 12 players to 5, with the dual-threat/pocket-passer split
 now reflected in the ordering (Bo Nix/Hurts ahead of Stafford/Prescott,
 which wasn't true before).
 
-## Projection accuracy diagnostic — Goff / Barkley / Evans / 2023 dip
+## Projection accuracy diagnostic + fixes — Goff / Barkley / Evans / 2023 dip
 
-**Open investigation — read-only, no code or config changes applied.**
 Triggered by three specific complaints (Goff QB4 too high, Barkley RB14
 too low, Evans too low among WRs) plus the long-logged, never-explained
-2023 QB/RB backtest dip. All four numbers below came straight out of
-`cheat_sheet.csv`/`fantasy_points_by_season.csv`/`backtest.py` (every
-diagnostic field needed was already present in the cached CSVs — no
-pipeline rerun was needed for the three-player part). Findings, in case
-a future session wants to act on any of them:
+2023 QB/RB backtest dip. Diagnosed first with zero code changes (every
+diagnostic field needed was already present in the cached CSVs), THEN
+two confirmed-real issues were fixed and validated via full backtest
+reruns before being accepted — the 2023 dip turned out not to be
+fixable at all (see its own section below).
 
-### Jared Goff (QB4) — diverges from the initial hypothesis
+### Jared Goff (QB4) — fixed, diverges from the initial hypothesis
 
 The original guess was "TD rate isn't being regressed toward a
 sustainable mean." Checked directly: his TD rate has climbed for two
@@ -216,54 +229,109 @@ straight seasons (2021-2025: 3.8% → 4.9% → 5.0% → 6.9% → 5.9%) in a
 stable scheme — not an obvious one-year fluke, so TD-rate regression
 isn't a clean explanation for him specifically.
 
-The actual driver is `qb_rushing_emphasis_factor` = **1.094** (a +9.4%
-boost on top of an already-strong raw projection), and the mechanism is
+The actual driver was `qb_rushing_emphasis_factor` = **1.094** (a +9.4%
+boost on top of an already-strong raw projection), and the mechanism was
 a real formula flaw: `emphasized_yards = passing_yards + 3×rushing_yards`
-(`QB_RUSHING_YARDS_WEIGHT` in `config.py`) is dominated by `passing_yards`
-for any high-volume passer, rushing or not. Checked Goff's actual
-recency-weighted emphasized yards (~4,718) against real dual-threat QBs
-— it's comparable to or **higher than Lamar Jackson's** (~4,709, though
-his 2025 was injury-shortened) and not far off Josh Allen's (~5,433). A
-pure pocket passer in a high-volume offense gets nearly as much "rushing
-emphasis" credit as an actual rushing QB, on top of already getting full
-credit for that same passing volume in his base fantasy points — a real
-double-count, diverging from the adjustment's own documented intent
-("not just re-counting the same points twice" — see the QB rushing
-emphasis section above).
+was dominated by `passing_yards` for any high-volume passer, rushing or
+not. Checked Goff's actual recency-weighted emphasized yards (~4,718)
+against real dual-threat QBs — it was comparable to or **higher than
+Lamar Jackson's** (~4,709, though his 2025 was injury-shortened) and not
+far off Josh Allen's (~5,433). A pure pocket passer in a high-volume
+offense was getting nearly as much "rushing emphasis" credit as an
+actual rushing QB, on top of already getting full credit for that same
+passing volume in his base fantasy points — a real double-count,
+diverging from the adjustment's own documented intent ("not just
+re-counting the same points twice").
 
-**Unapplied candidate fix**: base `emphasized_yards` on `rushing_yards`
-alone (drop the `passing_yards` term entirely) so the ratio isolates
-rushing production specifically, rather than total yardage volume.
-Needs a full backtest rerun before accepting — not done yet.
+**Fixed**: `emphasized_yards` now uses `rushing_yards` alone — see the
+"QB rushing emphasis" section above for the full writeup (formula
+change, the now-removed `QB_RUSHING_YARDS_WEIGHT` knob turning out to be
+mathematically inert, and the `QB_RUSHING_EMPHASIS_STRENGTH` re-tune
+from 0.3 to 0.05). **Result**: Goff QB4 → **QB6**, with his
+`qb_rushing_emphasis_factor` now a mild 0.96 (a small, appropriate
+discount) instead of the old 1.09 boost. QB backtest accuracy improved
+too (mean rank correlation 0.7069 → 0.7081 across 2021-2025, 3 of 5
+years better, 1 worse, 1 flat) — a clean win, not a tradeoff.
 
-### Saquon Barkley (RB14) and Mike Evans (too low among WRs) — confirms the AGE_CURVES overfitting concern
+### Saquon Barkley (RB14) and Mike Evans (too low among WRs) — confirms the AGE_CURVES overfitting concern, but the fix only applied to RB
 
-Both are overwhelmingly driven by `age_adjustment_factor` — everything
-else (team offense, target share) is within a few percent of neutral.
+Both were overwhelmingly driven by `age_adjustment_factor` — everything
+else (team offense, target share) was within a few percent of neutral.
 Recomputed both using the real `evidence_based_age_adjustment()`
-function with the pre-grid-search curve values vs. the current
+function with the pre-grid-search curve values vs. the then-current
 (grid-search-retuned) ones:
 
-| Player | Old curve factor → points | Current curve factor → points | Rank swing |
+| Player | Old curve factor → points | Retuned curve factor → points | Rank swing |
 |---|---|---|---|
-| Barkley (age 29.6) | 0.857 → 248.3 pts | 0.632 → 183.3 pts (actual) | **RB14 → RB5** |
-| Evans (age 33.0) | 0.849 → 120.0 pts | 0.548 → 77.5 pts (actual) | **WR63 → WR44** |
+| Barkley (age 29.6) | 0.857 → 248.3 pts | 0.632 → 183.3 pts (actual) | **RB14 → RB5** (isolated test) |
+| Evans (age 33.0) | 0.849 → 120.0 pts | 0.548 → 77.5 pts (actual) | **WR63 → WR44** (isolated test) |
 
 (Old curve: RB 27/0.06, WR 29/0.04 — the original domain-knowledge
-values before the grid search retuned them to RB 23/0.06, WR 25/0.06;
-see `AGE_CURVES` in `config.py`.) A single knob swings both players by
-double-digit rank positions — strong, concrete evidence the retuned
-curve is the dominant factor for both complaints, not a red herring.
-This is the exact overfitting risk `AGE_CURVES` was already flagged
-with in the Tuning section above — now with named-player evidence
-behind it instead of just the abstract "hugs the edge of the grid"
-signal from the second tuning pass.
+values before the grid search retuned them to RB 23/0.06, WR 25/0.06.)
+A single knob swinging both players by double-digit rank positions was
+strong, concrete evidence the retuned curve was the dominant factor for
+both complaints — not a red herring, and the exact overfitting risk
+`AGE_CURVES` was already flagged with in the Tuning section above.
 
-**Unapplied candidate fix**: revert `AGE_CURVES` RB/WR to the
-pre-grid-search values. Also needs a full backtest rerun before
-accepting — reverting shouldn't be done by eyeballing these two players
-improving without checking it doesn't silently break players the
-current curve happens to get right elsewhere in the pool.
+**But the full backtest told a more complicated story once both were
+actually reverted together.** RB's cost was small and mixed (2 of 5
+years better, 3 worse, mean -0.0044); **WR got WORSE in all 5 of 5
+years tested** (mean -0.0084) — not noise, a consistent pattern.
+Discussed directly and resolved: **reverted RB only, kept WR at the
+grid-search value (25, 0.06)**. Barkley's complaint gets fixed; Evans
+stays under-projected as a deliberately accepted limitation — a
+33-year-old still-productive WR is a rare pattern in a 5-year sample,
+and the grid-search curve appears to genuinely fit the broader WR
+population better even though it mishandles this one outlier. With only
+RB reverted, WR's backtest numbers came back to essentially the original
+baseline (mean rank correlation 0.7633 → 0.7640, 0 years worse) —
+confirming WR's problem really was specifically the WR curve change,
+not some other interaction.
+
+**Final applied config**: `AGE_CURVES` RB reverted to `(27, 0.06)`; WR
+and TE both stay at the grid-search values `(25, 0.06)` (TE was never
+touched at all — the diagnostic gathered zero direct evidence for TE).
+**Result**: Barkley RB14 → **RB10** (a real fix, though gentler than the
+isolated-test estimate of RB5 once combined with the actual final config
+rather than a hypothetical single-knob change); Evans stays **WR63**,
+unchanged, by design.
+
+**A genuinely low-confidence knob surfaced along the way**:
+`AGE_TREND_DAMPENING` was re-checked against the reverted curves (the
+two interact) and turned out to be unstable, not just marginal — its
+"winner" flip-flopped between 0.0 and 0.2 across three re-runs against
+slightly different curve combinations during this investigation, with
+every value in that range scoring within ~0.0006 of each other (compare
+to the ~0.012 swing that justified the original 0.5→0.1 move — this is
+nowhere near that kind of signal). Kept at the prior validated value
+(0.1) rather than chase noise.
+
+**Real bug found and fixed during this re-check**: `grid_search.py`'s
+"unfiltered" search objective (used by Stages 1/2/4 and the baseline/
+final reporting) was silently including K in the optimization target —
+K/DEF rows exist in `season_summary` now (from the K/DEF work) but this
+whole search predates that, and K isn't even affected by several of
+these knobs at all (e.g. `AGE_TREND_DAMPENING` has zero effect on K —
+it's not in `AGE_CURVES`). `backtest.py` already had a
+`POSITIONS = ["QB", "RB", "WR", "TE"]` constant declared for apparently
+exactly this purpose, but it was never actually wired up to filter
+anything. Fixed by filtering `evaluate()`'s combined result to
+`POSITIONS` in `grid_search.py` — this affects every future
+`grid_search.py` run, not just this session's. Position-scoped calls
+(e.g. `mean_rank_correlation(joined, position="QB")`) were never
+affected by this bug, since they already narrowed to one position
+explicitly — so the earlier-established DECAY/TEAM_OFFENSE_ADJUSTMENT_
+STRENGTH/QB_RUSHING_YARDS_WEIGHT(now removed)/QB_RUSHING_EMPHASIS_
+STRENGTH results all predate K/DEF's existence anyway and were never
+contaminated by this.
+
+**Overall backtest impact of everything in this section combined**
+(rushing-emphasis fix + RB-only AGE_CURVES revert + AGE_TREND_DAMPENING
+kept at 0.1): pooled rank correlation across all positions/years
+0.8125 → 0.8123 (essentially flat, -0.0002). QB tiering (the original
+reason the rushing-emphasis adjustment was built) spot-checked and
+confirmed NOT regressed — tier 2 has 1 player, tier 3 has 3, tier 4 has
+5, nothing close to the old 12-player mega-tier problem.
 
 ### 2023 QB/RB backtest dip — root cause found, but it's not a tunable knob
 
@@ -881,13 +949,21 @@ happened before your turn get filled in automatically.
 Everything below is committed and pushed to `main` — working tree clean,
 nothing local-only except gitignored secrets (see the ESPN section).
 
-- **Model**: DECAY, TEAM_OFFENSE_ADJUSTMENT_STRENGTH,
-  QB_RUSHING_YARDS_WEIGHT/STRENGTH, and TARGET_SHARE_ADJUSTMENT_STRENGTH
-  are all backtest-confirmed (see "Tuning" section above).
-  AGE_CURVES is flagged low-confidence — real overfitting evidence, don't
-  trust a future grid_search.py Stage 3 run just because it looks
-  "consistent." LOOKBACK_SEASONS left at its original default (5) — the
-  search signal for it was noisy across windows, not worth chasing.
+- **Model**: DECAY, TEAM_OFFENSE_ADJUSTMENT_STRENGTH, and
+  TARGET_SHARE_ADJUSTMENT_STRENGTH are all backtest-confirmed (see
+  "Tuning" section above). QB_RUSHING_YARDS_WEIGHT no longer exists —
+  removed as part of the Goff fix (see "Projection accuracy diagnostic +
+  fixes" below); QB_RUSHING_EMPHASIS_STRENGTH re-tuned to 0.05 (was 0.3)
+  for the reformulated (rushing-only) signal. AGE_CURVES: RB reverted to
+  the original domain-knowledge value and backtest-validated (real
+  overfitting evidence, not just theoretical caution — see that same
+  section); WR and TE remain at the grid-search values, still flagged
+  low-confidence, don't trust a future grid_search.py Stage 3 run just
+  because it looks "consistent." AGE_TREND_DAMPENING re-checked and
+  found genuinely unstable against different curve combinations — kept
+  at its prior value (0.1) rather than chase noise. LOOKBACK_SEASONS
+  left at its original default (5) — the search signal for it was noisy
+  across windows, not worth chasing.
 - **App**: manual pick tracking works — checkbox removes a player from
   the board, Reset (with a confirm dialog) brings everyone back,
   localStorage-persisted so a reload mid-draft doesn't lose picks.
