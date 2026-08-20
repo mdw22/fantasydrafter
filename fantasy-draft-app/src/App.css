@@ -7,6 +7,11 @@
   --alert: #c1443c;
   --ink: #12211b;
 
+  --pos-qb: #6a3fa0;
+  --pos-rb: #2f8f5b;
+  --pos-wr: #2d6fa8;
+  --pos-te: #b06a2c;
+
   --font-display: "Anton", sans-serif;
   --font-body: "IBM Plex Sans", sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
@@ -170,28 +175,37 @@ body {
   border-color: var(--flag);
 }
 
-.tabs__spacer {
-  flex: 1;
+/* --- Draft controls row (below tabs): sort toggle, status, Reset --- */
+
+.draft-controls {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 
+.draft-controls__status {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+/* Read-only status, deliberately quiet — same de-emphasized treatment as
+   .col-rank elsewhere — so it doesn't compete with the toggle or Reset. */
 .drafted-count,
 .mine-count {
-  align-self: center;
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: rgba(241, 237, 228, 0.6);
+  color: var(--hash);
   white-space: nowrap;
-}
-
-.mine-count {
-  color: var(--flag);
 }
 
 .sort-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  align-self: center;
+  justify-self: start;
   font-family: var(--font-mono);
   font-size: 0.8rem;
   color: rgba(241, 237, 228, 0.7);
@@ -209,17 +223,33 @@ body {
   cursor: not-allowed;
 }
 
-.tab--reset {
-  border-color: var(--alert);
+/* Quieter than the old tab-styled Reset — the alert-red color alone
+   carries the "careful, destructive" signal, so it doesn't need to be
+   large or bold to stand out. */
+.reset-button {
+  justify-self: end;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  background: transparent;
+  color: var(--alert);
+  border: 1px solid var(--alert);
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.tab--reset:hover:not(:disabled) {
+.reset-button:hover:not(:disabled) {
   background: var(--alert);
   color: var(--chalk);
-  border-color: var(--alert);
 }
 
-.tab--reset:disabled {
+.reset-button:focus-visible {
+  outline: 2px solid var(--alert);
+  outline-offset: 2px;
+}
+
+.reset-button:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
@@ -416,19 +446,19 @@ body {
 }
 
 .chip--QB {
-  background: #6a3fa0;
+  background: var(--pos-qb);
   color: var(--chalk);
 }
 .chip--RB {
-  background: #2f8f5b;
+  background: var(--pos-rb);
   color: var(--chalk);
 }
 .chip--WR {
-  background: #2d6fa8;
+  background: var(--pos-wr);
   color: var(--chalk);
 }
 .chip--TE {
-  background: #b06a2c;
+  background: var(--pos-te);
   color: var(--chalk);
 }
 

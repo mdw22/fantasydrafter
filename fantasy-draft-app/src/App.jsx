@@ -462,6 +462,9 @@ export default function App() {
             {tab}
           </button>
         ))}
+      </nav>
+
+      <div className="draft-controls">
         <label
           className="sort-toggle"
           title="Only affects the ALL tab's ordering"
@@ -474,17 +477,18 @@ export default function App() {
           />
           Sort by strategy
         </label>
-        <div className="tabs__spacer" />
-        <span className="drafted-count">{draftedIds.size} drafted</span>
-        <span className="mine-count">{myRosterIds.size} on your roster</span>
+        <div className="draft-controls__status">
+          <span className="drafted-count">{draftedIds.size} drafted</span>
+          <span className="mine-count">{myRosterIds.size} on your roster</span>
+        </div>
         <button
-          className="tab tab--reset"
+          className="reset-button"
           onClick={handleReset}
           disabled={draftedIds.size === 0}
         >
           Reset
         </button>
-      </nav>
+      </div>
 
       <main className="board">
         {error && (
