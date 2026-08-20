@@ -338,6 +338,26 @@ export default function App() {
   }, [available, rosterCounts, currentRound, scoreFn]);
 
   const recommendation = useMemo(() => {
+    // Force DEF/K onto the recommendation for your last 2 picks if you
+    // don't have one yet. Without this override they'd never appear here
+    // at all: crossPositionValue() deliberately pushes their score below
+    // every skill position (see strategies.js), and the roster caps never
+    // fully close off skill positions on their own — see PROJECTNOTES.md
+    // "K/DEF late-round push" for the full story. Compares missing DEF/K
+    // candidates by their own true VBD (not the suppressed cross-position
+    // value) — the suppression's whole point was "don't take this too
+    // early," which no longer applies once we're deliberately forcing it.
+    if (myRosterIds.size >= FULL_ROSTER_SIZE - 2) {
+      const missingPositions = ["DEF", "K"].filter((pos) => (rosterCounts[pos] ?? 0) === 0);
+      if (missingPositions.length > 0) {
+        const candidates = scoredAvailable.filter((p) => missingPositions.includes(p.position));
+        if (candidates.length > 0) {
+          const top = [...candidates].sort((a, b) => b.vbd - a.vbd)[0];
+          return { top, alsoConsider: null, forced: true };
+        }
+      }
+    }
+
     const eligible = scoredAvailable.filter((p) => !isPositionFull(p.position, rosterCounts));
     if (eligible.length === 0) return null;
 
@@ -348,8 +368,8 @@ export default function App() {
     const top = byStrategy[0];
     const alsoConsider = byRawVBD[0].player_id !== top.player_id ? byRawVBD[0] : null;
 
-    return { top, alsoConsider };
-  }, [scoredAvailable, rosterCounts]);
+    return { top, alsoConsider, forced: false };
+  }, [scoredAvailable, rosterCounts, myRosterIds]);
 
   const rosterView = useMemo(() => {
     if (!players) return null;
@@ -445,11 +465,17 @@ export default function App() {
               <span className="recommendation-panel__name">
                 {recommendation.top.player_display_name}
               </span>
-              {recommendation.alsoConsider && (
+              {recommendation.forced ? (
                 <span className="recommendation-panel__also">
-                  also consider: <PositionChip position={recommendation.alsoConsider.position} />
-                  {recommendation.alsoConsider.player_display_name}
+                  you don't have a {recommendation.top.position} yet &mdash; grab one now
                 </span>
+              ) : (
+                recommendation.alsoConsider && (
+                  <span className="recommendation-panel__also">
+                    also consider: <PositionChip position={recommendation.alsoConsider.position} />
+                    {recommendation.alsoConsider.player_display_name}
+                  </span>
+                )
               )}
             </div>
           ) : (

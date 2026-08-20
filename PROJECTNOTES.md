@@ -319,18 +319,26 @@ undiscounted VBD and tiers among themselves:
   strategy + always pick the top of the list" never drafted a K or DEF
   at all — skill positions stayed "eligible" the whole way through,
   since the recommendation engine has no concept of total roster
-  capacity, only per-position caps. **Known limitation, not fixed**:
-  the recommendation/sort-by-strategy convenience workflow won't
-  naturally nudge you toward K/DEF; you have to visit their tabs and
-  draft them manually, same as real players already do without being
-  reminded. Fixing this properly would mean teaching the recommendation
-  engine about total roster capacity (not just per-position caps) —
-  a meaningfully bigger change than what was asked for here, intentionally
-  not built. If this needs revisiting, the fix would need
-  `isPositionFull()` (or a parallel check) to also treat skill positions
-  as "full" once you're within (K/DEF slots still needed) picks of a
-  complete 16-player roster, not just once each position hits its own
-  cap.
+  capacity, only per-position caps.
+- **Fixed** (originally shipped as a documented known limitation, then
+  addressed on user request): the `recommendation` useMemo in `App.jsx`
+  now has an explicit override that fires once your roster has
+  `FULL_ROSTER_SIZE - 2` (14) or more players — if you're still missing
+  a DEF or K at that point, the callout forces whichever missing one has
+  the higher true VBD (comparing DEF vs. K directly by `vbd`, NOT the
+  suppressed `crossPositionValue()` — the whole point of that
+  suppression was "don't take this too early," which no longer applies
+  once it's being deliberately forced) instead of the normal strategy
+  pick, with `alsoConsider` replaced by a plain-language note ("you
+  don't have a K yet — grab one now"). If only one of DEF/K is missing
+  (e.g. you drafted one manually earlier), it forces that one
+  specifically rather than comparing against the one you already have.
+  This is a targeted override on top of the recommendation callout
+  only — it does NOT touch the "Sort by strategy" board ordering, which
+  still uses the full late-round suppression everywhere. Verified: at
+  14/16 with neither drafted, forces the higher-VBD one of the two; at
+  15/16 with the other still missing, forces that one; with only K
+  missing (DEF drafted earlier), forces K specifically, not DEF.
 
 ### React app additions
 
@@ -476,10 +484,10 @@ tuned, now covers QB/RB/WR/TE/K/DEF** — see "Kicker + Defense" above) →
 cheat sheet (VBD/tiers, **done**) → React UI (**done, functional,
 includes manual pick tracking, K/DEF tabs**) → live draft assistant
 (**manual pick tracking done, including which picks are yours; Robust RB
-strategy recommendation done** — see "Draft Strategy Recommendations"
-below; positional scarcity alerts beyond Robust RB not started; known
-limitation — the recommendation engine won't naturally nudge you toward
-K/DEF, see "Kicker + Defense" above) → ESPN auto-sync (**tabled until
+strategy recommendation done, including a forced DEF/K recommendation
+for your last 2 picks if you don't have one yet** — see "Draft Strategy
+Recommendations" and "Kicker + Defense" below; positional scarcity
+alerts beyond Robust RB not started) → ESPN auto-sync (**tabled until
 after this season's draft** — see "ESPN Live Draft Sync — Design Notes"
 below).
 
