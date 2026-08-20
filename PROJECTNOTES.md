@@ -197,6 +197,114 @@ dropped from 12 players to 5, with the dual-threat/pocket-passer split
 now reflected in the ordering (Bo Nix/Hurts ahead of Stafford/Prescott,
 which wasn't true before).
 
+## Projection accuracy diagnostic — Goff / Barkley / Evans / 2023 dip
+
+**Open investigation — read-only, no code or config changes applied.**
+Triggered by three specific complaints (Goff QB4 too high, Barkley RB14
+too low, Evans too low among WRs) plus the long-logged, never-explained
+2023 QB/RB backtest dip. All four numbers below came straight out of
+`cheat_sheet.csv`/`fantasy_points_by_season.csv`/`backtest.py` (every
+diagnostic field needed was already present in the cached CSVs — no
+pipeline rerun was needed for the three-player part). Findings, in case
+a future session wants to act on any of them:
+
+### Jared Goff (QB4) — diverges from the initial hypothesis
+
+The original guess was "TD rate isn't being regressed toward a
+sustainable mean." Checked directly: his TD rate has climbed for two
+straight seasons (2021-2025: 3.8% → 4.9% → 5.0% → 6.9% → 5.9%) in a
+stable scheme — not an obvious one-year fluke, so TD-rate regression
+isn't a clean explanation for him specifically.
+
+The actual driver is `qb_rushing_emphasis_factor` = **1.094** (a +9.4%
+boost on top of an already-strong raw projection), and the mechanism is
+a real formula flaw: `emphasized_yards = passing_yards + 3×rushing_yards`
+(`QB_RUSHING_YARDS_WEIGHT` in `config.py`) is dominated by `passing_yards`
+for any high-volume passer, rushing or not. Checked Goff's actual
+recency-weighted emphasized yards (~4,718) against real dual-threat QBs
+— it's comparable to or **higher than Lamar Jackson's** (~4,709, though
+his 2025 was injury-shortened) and not far off Josh Allen's (~5,433). A
+pure pocket passer in a high-volume offense gets nearly as much "rushing
+emphasis" credit as an actual rushing QB, on top of already getting full
+credit for that same passing volume in his base fantasy points — a real
+double-count, diverging from the adjustment's own documented intent
+("not just re-counting the same points twice" — see the QB rushing
+emphasis section above).
+
+**Unapplied candidate fix**: base `emphasized_yards` on `rushing_yards`
+alone (drop the `passing_yards` term entirely) so the ratio isolates
+rushing production specifically, rather than total yardage volume.
+Needs a full backtest rerun before accepting — not done yet.
+
+### Saquon Barkley (RB14) and Mike Evans (too low among WRs) — confirms the AGE_CURVES overfitting concern
+
+Both are overwhelmingly driven by `age_adjustment_factor` — everything
+else (team offense, target share) is within a few percent of neutral.
+Recomputed both using the real `evidence_based_age_adjustment()`
+function with the pre-grid-search curve values vs. the current
+(grid-search-retuned) ones:
+
+| Player | Old curve factor → points | Current curve factor → points | Rank swing |
+|---|---|---|---|
+| Barkley (age 29.6) | 0.857 → 248.3 pts | 0.632 → 183.3 pts (actual) | **RB14 → RB5** |
+| Evans (age 33.0) | 0.849 → 120.0 pts | 0.548 → 77.5 pts (actual) | **WR63 → WR44** |
+
+(Old curve: RB 27/0.06, WR 29/0.04 — the original domain-knowledge
+values before the grid search retuned them to RB 23/0.06, WR 25/0.06;
+see `AGE_CURVES` in `config.py`.) A single knob swings both players by
+double-digit rank positions — strong, concrete evidence the retuned
+curve is the dominant factor for both complaints, not a red herring.
+This is the exact overfitting risk `AGE_CURVES` was already flagged
+with in the Tuning section above — now with named-player evidence
+behind it instead of just the abstract "hugs the edge of the grid"
+signal from the second tuning pass.
+
+**Unapplied candidate fix**: revert `AGE_CURVES` RB/WR to the
+pre-grid-search values. Also needs a full backtest rerun before
+accepting — reverting shouldn't be done by eyeballing these two players
+improving without checking it doesn't silently break players the
+current curve happens to get right elsewhere in the pool.
+
+### 2023 QB/RB backtest dip — root cause found, but it's not a tunable knob
+
+Quantitatively, 2023 wasn't dramatically noisier than other years in raw
+terms (17.7% of QB/RB backtest players had >100pt absolute error vs.
+13-16% in 2021/2022/2024/2025; mean abs error 54.0 vs. 47-50 elsewhere)
+— rank correlation (0.60 QB / 0.63 RB, both the low point of the
+5-year window) dropped more than error magnitude did because the misses
+were concentrated **at the top of the rankings**, which rank correlation
+is disproportionately sensitive to.
+
+Rebuilt the actual 2023 backtest projection (`bin/backtest.py`'s
+`build_backtest_projection`/`score_year`) and sorted by error to find
+the specific players driving it. Both positions show the same
+symmetric pattern:
+
+- **QB**: Aaron Rodgers (projected #10, actual #75 — tore his Achilles
+  on the 4th offensive snap of the season), Kyler Murray (#8→#26, still
+  recovering from ACL), several veteran game-managers benched mid-season
+  (Wentz, Mariota, Garoppolo, Darnold, Mac Jones) — all over-projected.
+  Jordan Love (#58→#5), Brock Purdy (#29→#6), Sam Howell, Josh Dobbs,
+  Gardner Minshew, Desmond Ridder all broke out from backup/unproven
+  roles the model had no real track record to project from — all
+  badly under-projected.
+- **RB**: Austin Ekeler (#1→#26), Josh Jacobs (#3→#28), Fournette,
+  Dalvin Cook, Aaron Jones all lost jobs or underperformed — this was
+  the well-documented "veteran RB market crash" offseason. Kyren
+  Williams (#79→#7), Raheem Mostert, Jerome Ford, Breece Hall, James
+  Cook all broke out from committee/backup roles into lead-back volume
+  nobody predicted.
+
+**Conclusion: this is a role/opportunity-unpredictability problem, not
+a scoring-efficiency problem** — it doesn't point at TD regression or
+any tunable config knob. No stats-based recency-weighted model can
+predict a Week 1 season-ending injury to an elite starter or a
+mid-season benching in favor of an unproven backup. Closer to
+irreducible variance than a bug: 2023 just had an unusually large
+*concentration* of these events landing on players ranked at the top.
+**No fix proposed or applied** — flagging this as explained/understood
+rather than a mystery, not as something actionable.
+
 ## Kicker + Defense (K/DEF)
 
 Both now covered end-to-end: `compute_fantasy_points.py` → `projection_model.py`
