@@ -344,6 +344,16 @@ body {
   outline-offset: 1px;
 }
 
+.mine-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.mine-button:disabled:hover {
+  color: rgba(241, 237, 228, 0.4);
+  border-color: rgba(241, 237, 228, 0.25);
+}
+
 .col-rank {
   width: 40px;
   color: var(--hash);

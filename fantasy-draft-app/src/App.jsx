@@ -88,15 +88,20 @@ function PositionChip({ position }) {
   return <span className={`chip chip--${position}`}>{position}</span>;
 }
 
-function PlayerRow({ player, rankField, onDraft, onDraftMine }) {
+function PlayerRow({ player, rankField, onDraft, onDraftMine, myRosterFull }) {
   return (
     <tr>
       <td className="col-mine">
         <button
           type="button"
           className="mine-button"
-          aria-label={`Mark ${player.player_display_name} as drafted by your team`}
-          title="Drafted by your team"
+          aria-label={
+            myRosterFull
+              ? "Your roster is full — reset to draft more"
+              : `Mark ${player.player_display_name} as drafted by your team`
+          }
+          title={myRosterFull ? "Your roster is full — reset to draft more" : "Drafted by your team"}
+          disabled={myRosterFull}
           onClick={() => onDraftMine(player.player_id)}
         >
           ★
@@ -272,6 +277,11 @@ export default function App() {
   // pick instead of one. A plain click handler isn't re-invoked that way,
   // so reading draftedIds from closure here is safe.
   const handleDraftMine = (playerId) => {
+    // Belt-and-suspenders: the ★ button is already disabled once the
+    // roster is full (see myRosterFull below), but guard the handler
+    // itself too rather than relying solely on the UI being disabled.
+    if (myRosterIds.size >= FULL_ROSTER_SIZE) return;
+
     const nextDrafted = new Set(draftedIds).add(playerId);
 
     if (autodraftEnabled && players) {
@@ -323,6 +333,8 @@ export default function App() {
     [players, myRosterIds]
   );
 
+  const myRosterFull = myRosterIds.size >= FULL_ROSTER_SIZE;
+
   const currentRound = useMemo(() => computeCurrentRound(draftedIds.size), [draftedIds]);
 
   const scoreFn = STRATEGIES[activeStrategy].score;
@@ -338,6 +350,9 @@ export default function App() {
   }, [available, rosterCounts, currentRound, scoreFn]);
 
   const recommendation = useMemo(() => {
+    // Nothing left to recommend once your roster is full.
+    if (myRosterIds.size >= FULL_ROSTER_SIZE) return null;
+
     // Force DEF/K onto the recommendation for your last 2 picks if you
     // don't have one yet. Without this override they'd never appear here
     // at all: crossPositionValue() deliberately pushes their score below
@@ -500,7 +515,9 @@ export default function App() {
             </div>
           ) : (
             <div className="recommendation-panel__pick recommendation-panel__pick--empty">
-              No recommendation available &mdash; roster targets filled or no players left.
+              {myRosterFull
+                ? "Your roster is full — reset to draft more."
+                : "No recommendation available — roster targets filled or no players left."}
             </div>
           )}
         </section>
@@ -629,6 +646,7 @@ export default function App() {
                       rankField="vbd_rank_overall"
                       onDraft={handleDraft}
                       onDraftMine={handleDraftMine}
+                      myRosterFull={myRosterFull}
                     />
                   ))
                 : groupedByTier.map((group) => (
@@ -637,6 +655,7 @@ export default function App() {
                       group={group}
                       onDraft={handleDraft}
                       onDraftMine={handleDraftMine}
+                      myRosterFull={myRosterFull}
                     />
                   ))}
             </tbody>
@@ -647,7 +666,7 @@ export default function App() {
   );
 }
 
-function FragmentGroup({ group, onDraft, onDraftMine }) {
+function FragmentGroup({ group, onDraft, onDraftMine, myRosterFull }) {
   return (
     <>
       <TierDivider tier={group.tier} />
@@ -658,6 +677,7 @@ function FragmentGroup({ group, onDraft, onDraftMine }) {
           rankField="position_rank"
           onDraft={onDraft}
           onDraftMine={onDraftMine}
+          myRosterFull={myRosterFull}
         />
       ))}
     </>
