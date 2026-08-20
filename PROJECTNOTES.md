@@ -197,6 +197,162 @@ dropped from 12 players to 5, with the dual-threat/pocket-passer split
 now reflected in the ordering (Bo Nix/Hurts ahead of Stafford/Prescott,
 which wasn't true before).
 
+## Kicker + Defense (K/DEF)
+
+Both now covered end-to-end: `compute_fantasy_points.py` → `projection_model.py`
+→ `vbd_and_tiers.py` → React app, same as QB/RB/WR/TE. Built from a
+detailed design doc; scoring rules were confirmed directly against the
+real league settings screen (not guessed), and data columns were
+inspected live via nflreadpy before writing any scoring logic — same
+"don't guess column names" discipline as the rest of this project, since
+kicking/defense stats turned out to have several plausible-looking but
+wrong column names (see below).
+
+### Scoring
+
+- **Kicker** (`compute_kicker_points()`): FG makes tiered by distance —
+  0-39yd 3pt, 40-49yd 4pt, 50+yd 5pt — using nflreadpy's own distance-
+  bucketed columns (`fg_made_0_19`/`20_29`/`30_39`/`40_49`/`50_59`/`60_`,
+  confirmed present via live inspection, not assumed). Any miss is a
+  flat -1 regardless of distance, **and this includes blocked kicks**
+  (`fg_missed + fg_blocked`) — the league settings only list one "missed
+  FG" rule, no separate blocked-kick rule. PAT made = 1pt; missed PATs
+  aren't penalized (ESPN default). Kicking stats are unified into
+  `load_player_stats()` now — no separate `stat_type` argument needed.
+- **Defense/ST** (`compute_defense_points()`): play-based categories
+  (sack 1pt, INT 2pt, fumble recovery 2pt, safety 2pt, defensive 2pt
+  return 2pt, blocked kick 2pt, any defensive/ST return TD 6pt) plus
+  points-allowed and yards-allowed tiers, **additive** (both tiers apply
+  simultaneously — confirmed from the actual league settings, not an
+  either/or). `nfl.load_team_stats()` only has a team's own offense/
+  defense PLAY stats, not "points allowed" or "yards allowed" directly —
+  those are derived: points allowed from `nfl.load_schedules()`'s
+  per-game score (reshaped into a team-week row), yards allowed by
+  self-joining `team_stats` on `(game_id, opponent_team)` to pull the
+  OPPONENT's own total yards for that game.
+- **Column names that turned out to be red herrings** (found by
+  inspecting real 2023-2024 data before writing scoring logic, not
+  assumed): `def_fumbles` was always 0 in the sample checked —
+  `fumble_recovery_opp` is the real "defense recovered the opponent's
+  fumble" column. `def_tds` (turnover/blocked-kick return TDs) and
+  `special_teams_tds` (kickoff/punt return TDs) are two separate
+  columns, but both score identically (6pt) in this league, so they're
+  just summed together rather than split.
+- **Known gap**: the rare "1-point safety" rule (blocking a PAT back
+  into your own end zone) has no identifiable dedicated column in
+  nflreadpy's team_stats — not implemented. Negligible impact (this has
+  happened only a handful of times in NFL history).
+- Sanity-checked against real 2024 results before trusting the numbers:
+  top fantasy kickers (Chris Boswell, Brandon Aubrey) and top defenses
+  (Broncos, Packers, Eagles, Vikings) both matched real-world 2024
+  performance.
+
+### Pipeline adjustments (`projection_model.py`)
+
+- **Age adjustment**: DEF forced to `1.0` explicitly (a team has no age
+  at all) rather than relying on age coming back `null` for a team-
+  abbreviation "player_id" — both paths produce the same result, but the
+  explicit version doesn't depend on that being an accident of two
+  unrelated null-safety checks. K simply isn't a key in `AGE_CURVES`
+  (config.py), so it already gets `1.0` the same way any uncovered
+  position would — no special-casing needed there.
+- **Currently-rostered filter**: DEF explicitly bypasses it (all 32
+  teams are always "available" as a DEF option — a team isn't "on a
+  roster" or "a free agent" the way a person is). This had to be
+  explicit — DEF's player_id (a team abbreviation) would never match an
+  individual player_id from `load_rosters()` anyway, which would have
+  silently dropped every DEF row from the pool entirely if left
+  unhandled. K is NOT exempt — kickers are individual rostered players
+  and matched cleanly (confirmed: all 43 K IDs in a season's stats
+  matched `load_rosters()`).
+- **Roster-status (RES/injury) exclusion**: already works correctly for
+  DEF with no changes needed — DEF's team-abbreviation "player_id" never
+  matches an individual player's weekly roster status, so it comes back
+  `null`, and the existing `fill_null(False)` on the exclusion mask
+  means "no match" is never treated as "excluded."
+- **Team offense adjustment**: not explicitly discussed in the design
+  doc either way. K still gets it (its player_id matches
+  `load_rosters()` normally, so a kicker's team affects its projection
+  slightly). DEF doesn't (no match, defaults to `1.0`) — this happens
+  by construction, no code change needed.
+
+### K/DEF late-round push (the one real design decision made along the way)
+
+Raw VBD for K/DEF is mathematically consistent with every other
+position's methodology, but it doesn't match how anyone actually
+drafts. Found by testing before shipping this, not assumed: with no
+adjustment, the best kicker landed at **overall VBD rank ~49** (~round
+4) and the best defense at **~67** (~round 5) — the recommendation
+engine would have suggested drafting a kicker or defense way earlier
+than any real drafter would.
+
+Discussed directly and resolved as **a config-driven flat-point
+discount applied only to the cross-position comparison** — never to the
+`vbd` column/field itself, so K/DEF's own tab still shows true,
+undiscounted VBD and tiers among themselves:
+
+- `LATE_ROUND_POSITIONS = {"K", "DEF"}`, `LATE_ROUND_VBD_OFFSET = 300`
+  in `config.py`. 300 is a flat point offset, not a percentage — picked
+  so even the single BEST kicker/defense's discounted value still lands
+  below the WORST rostered skill-position player's true VBD
+  (skill-position VBD floor was ~-230 in the data checked; top K was
+  ~62, top DEF ~43). A flat offset was necessary rather than a
+  multiplier — K/DEF's VBD is positive while deep skill-position VBD is
+  negative, and no positive multiplier can push a positive number below
+  a negative one.
+- Applied in `vbd_and_tiers.py`'s `compute_vbd()` for `vbd_rank_overall`
+  only. Mirrored in the React app as `crossPositionValue()` in
+  `strategies.js` (same offset, same position set, **manually kept in
+  sync** — there's no shared source of truth between the Python and JS
+  sides here, worth double-checking both if this ever gets retuned),
+  used by `robustRBScore`'s QB/TE/K/DEF fallback and the "also consider"
+  raw-BPA comparison in `App.jsx`. Verified: with this in place, K/DEF
+  no longer appear anywhere in the top 20 of the ALL tab, and the
+  Recommended Pick callout never suggests either from a fresh draft
+  state.
+- **This calibration is deliberately aggressive** — it guarantees K/DEF
+  rank below literally every skill-position player in the pool (600+
+  players), not just "somewhere realistic like round 10-13." Found via
+  further testing: combined with the existing `MAX_ROSTER_COUNTS` caps
+  (QB:2/RB:6/WR:6/TE:2 = 16, which exceeds the roster's actual 14
+  skill-position slots), simulating a full 16-round draft via "sort by
+  strategy + always pick the top of the list" never drafted a K or DEF
+  at all — skill positions stayed "eligible" the whole way through,
+  since the recommendation engine has no concept of total roster
+  capacity, only per-position caps. **Known limitation, not fixed**:
+  the recommendation/sort-by-strategy convenience workflow won't
+  naturally nudge you toward K/DEF; you have to visit their tabs and
+  draft them manually, same as real players already do without being
+  reminded. Fixing this properly would mean teaching the recommendation
+  engine about total roster capacity (not just per-position caps) —
+  a meaningfully bigger change than what was asked for here, intentionally
+  not built. If this needs revisiting, the fix would need
+  `isPositionFull()` (or a parallel check) to also treat skill positions
+  as "full" once you're within (K/DEF slots still needed) picks of a
+  complete 16-player roster, not just once each position hits its own
+  cap.
+
+### React app additions
+
+- `POSITIONS` in `App.jsx` extended to `["QB","RB","WR","TE","K","DEF"]`
+  — this alone adds K/DEF tabs (tier-grouped, position-ranked, same as
+  every other position tab) since `TABS` is derived from it.
+- `MAX_ROSTER_COUNTS`/`computeRosterCounts` in `strategies.js` extended
+  with `K: 1, DEF: 1` — there's exactly one K slot and one DEF slot, so
+  a 2nd of either is never useful in a redraft league.
+- **My Roster tab**: `STARTING_SLOTS` restructured from two
+  index-coupled parallel arrays (position list + hardcoded label list)
+  into a single array of `{ position, label }` pairs — was fragile
+  before (adding a slot meant keeping two arrays in sync by index), now
+  each slot's label lives right next to what fills it. DEF and K added
+  as their own dedicated starting slots (not FLEX-eligible, matching
+  real roster rules). `FULL_ROSTER_SIZE` (draft-grade unlock threshold)
+  is derived from this same array, so it moved from 14 to 16
+  automatically — no separate number to keep in sync.
+- New CSS chip colors `--pos-k` (muted blue-gray) and `--pos-def`
+  (muted brown), following the same `--pos-*` custom-property pattern
+  established for QB/RB/WR/TE.
+
 ## Known gotchas already hit (don't re-debug these)
 
 - **`load_rosters()` and `load_team_stats()` disagree on Arizona's team
@@ -316,13 +472,16 @@ which wasn't true before).
 ## Build order / status
 
 Requirements → projection model (**done, backtested + grid-search
-tuned**) → cheat sheet (VBD/tiers, **done**) → React UI (**done,
-functional, includes manual pick tracking**) → live draft assistant
+tuned, now covers QB/RB/WR/TE/K/DEF** — see "Kicker + Defense" above) →
+cheat sheet (VBD/tiers, **done**) → React UI (**done, functional,
+includes manual pick tracking, K/DEF tabs**) → live draft assistant
 (**manual pick tracking done, including which picks are yours; Robust RB
 strategy recommendation done** — see "Draft Strategy Recommendations"
-below; positional scarcity alerts beyond Robust RB not started) → ESPN
-auto-sync (**tabled until after this season's draft** — see "ESPN Live
-Draft Sync — Design Notes" below).
+below; positional scarcity alerts beyond Robust RB not started; known
+limitation — the recommendation engine won't naturally nudge you toward
+K/DEF, see "Kicker + Defense" above) → ESPN auto-sync (**tabled until
+after this season's draft** — see "ESPN Live Draft Sync — Design Notes"
+below).
 
 ## Draft Strategy Recommendations (Robust RB v1)
 

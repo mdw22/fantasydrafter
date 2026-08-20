@@ -7,9 +7,10 @@ import {
   computeRosterCounts,
   isPositionFull,
   compareByScoreThenVBD,
+  crossPositionValue,
 } from "./strategies";
 
-const POSITIONS = ["QB", "RB", "WR", "TE"];
+const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
 const ROSTER_SLOT_TAB = "MY ROSTER";
 const TABS = ["ALL", ...POSITIONS, ROSTER_SLOT_TAB];
 
@@ -21,15 +22,25 @@ const OPPONENT_PICKS_PER_ROUND = 13;
 // of the top one, so all 13 opponents don't read as one uniform BPA bot.
 const AUTODRAFT_ALT_PICK_CHANCE = 0.25;
 
-const STARTING_SLOT_POSITIONS = ["QB", "RB", "RB", "WR", "WR", "TE"];
+const STARTING_SLOTS = [
+  { position: "QB", label: "QB" },
+  { position: "RB", label: "RB1" },
+  { position: "RB", label: "RB2" },
+  { position: "WR", label: "WR1" },
+  { position: "WR", label: "WR2" },
+  { position: "TE", label: "TE" },
+  { position: "DEF", label: "DEF" },
+  { position: "K", label: "K" },
+];
 const FLEX_ELIGIBLE = ["RB", "WR", "TE"];
 const BENCH_SLOT_COUNT = 7;
-// 6 starting slots + FLEX + 7 bench = 14 — a full roster under this app's
-// slot model (not counting IR, which has no fill logic). Draft grade
-// unlocks once your roster reaches this size, deliberately derived from
-// the slot model above rather than a separate hardcoded 14, so the two
-// can't drift out of sync if the roster shape ever changes.
-const FULL_ROSTER_SIZE = STARTING_SLOT_POSITIONS.length + 1 + BENCH_SLOT_COUNT;
+// 8 starting slots (incl. DEF/K) + FLEX + 7 bench = 16 — a full roster
+// under this app's slot model (not counting IR, which has no fill logic).
+// Draft grade unlocks once your roster reaches this size, deliberately
+// derived from the slot model above rather than a separate hardcoded
+// number, so the two can't drift out of sync if the roster shape ever
+// changes.
+const FULL_ROSTER_SIZE = STARTING_SLOTS.length + 1 + BENCH_SLOT_COUNT;
 
 // Percent above/below the average other team's tallied projected points.
 // Tunable — bands are deliberately symmetric around a +/-5% "about average"
@@ -149,7 +160,10 @@ function buildRosterSlots(players, myRosterIds) {
     return best ?? null;
   };
 
-  const starters = STARTING_SLOT_POSITIONS.map((position) => takeBest(position));
+  const starterSlots = STARTING_SLOTS.map(({ position, label }) => ({
+    label,
+    player: takeBest(position),
+  }));
 
   const flex = mine
     .filter((p) => FLEX_ELIGIBLE.includes(p.position) && !used.has(p.player_id))
@@ -159,15 +173,7 @@ function buildRosterSlots(players, myRosterIds) {
   const bench = mine.filter((p) => !used.has(p.player_id)).sort((a, b) => b.vbd - a.vbd);
 
   return {
-    slots: [
-      { label: "QB", player: starters[0] },
-      { label: "RB1", player: starters[1] },
-      { label: "RB2", player: starters[2] },
-      { label: "WR1", player: starters[3] },
-      { label: "WR2", player: starters[4] },
-      { label: "TE", player: starters[5] },
-      { label: "FLEX", player: flex ?? null },
-    ],
+    slots: [...starterSlots, { label: "FLEX", player: flex ?? null }],
     bench,
     benchSlotCount: Math.max(BENCH_SLOT_COUNT, bench.length),
   };
@@ -336,7 +342,9 @@ export default function App() {
     if (eligible.length === 0) return null;
 
     const byStrategy = [...eligible].sort(compareByScoreThenVBD);
-    const byRawVBD = [...eligible].sort((a, b) => b.vbd - a.vbd);
+    const byRawVBD = [...eligible].sort(
+      (a, b) => crossPositionValue(b) - crossPositionValue(a)
+    );
     const top = byStrategy[0];
     const alsoConsider = byRawVBD[0].player_id !== top.player_id ? byRawVBD[0] : null;
 

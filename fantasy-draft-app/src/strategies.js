@@ -10,7 +10,7 @@ export function computeCurrentRound(totalDraftedCount) {
 }
 
 export function computeRosterCounts(players, myRosterIds) {
-  const counts = { QB: 0, RB: 0, WR: 0, TE: 0 };
+  const counts = { QB: 0, RB: 0, WR: 0, TE: 0, K: 0, DEF: 0 };
   for (const player of players) {
     if (myRosterIds.has(player.player_id)) {
       counts[player.position] = (counts[player.position] ?? 0) + 1;
@@ -24,11 +24,34 @@ export function computeRosterCounts(players, myRosterIds) {
 // it's still technically the highest-raw-VBD player left. Not roster-slot-
 // exact (FLEX/bench blur the line) — a deliberately generous "nobody would
 // actually take this" backstop, not a hard roster-legality check.
-// QB/TE capped at 2, RB/WR capped at 6 — per user direction.
-export const MAX_ROSTER_COUNTS = { QB: 2, RB: 6, WR: 6, TE: 2 };
+// QB/TE capped at 2, RB/WR capped at 6 — per user direction. K/DEF capped
+// at 1 each — there's exactly one K slot and one DEF slot on the roster,
+// so a 2nd of either is never useful in a redraft league.
+export const MAX_ROSTER_COUNTS = { QB: 2, RB: 6, WR: 6, TE: 2, K: 1, DEF: 1 };
 
 export function isPositionFull(position, rosterCounts) {
   return (rosterCounts[position] ?? 0) >= (MAX_ROSTER_COUNTS[position] ?? Infinity);
+}
+
+// K/DEF's raw VBD can look numerically competitive with mid-tier skill
+// positions, but real draft convention is to never touch K/DEF until the
+// very last picks — their week-to-week value is far more replaceable/
+// volatile than the point spread suggests. This offset is large enough
+// that even the single best K/DEF's cross-position value still lands
+// below the worst rostered skill-position player's true VBD (skill VBD
+// floor was ~-230 in the data checked when this was picked, K/DEF tops
+// out around 40-60). Same offset used server-side for vbd_rank_overall
+// in vbd_and_tiers.py (LATE_ROUND_VBD_OFFSET in config.py) — kept
+// manually in sync. Applied only to cross-position comparisons (this
+// function, and the "also consider" raw-BPA fallback in App.jsx) — never
+// to player.vbd itself, so K/DEF's own tab still shows true VBD/tiers.
+const LATE_ROUND_POSITIONS = new Set(["K", "DEF"]);
+const LATE_ROUND_VBD_OFFSET = 300;
+
+export function crossPositionValue(player) {
+  return LATE_ROUND_POSITIONS.has(player.position)
+    ? player.vbd - LATE_ROUND_VBD_OFFSET
+    : player.vbd;
 }
 
 // --- Robust RB ---
@@ -57,7 +80,9 @@ function taperedMultiplier(baseMultiplier, currentRound) {
 
 function robustRBScore(player, rosterCounts, currentRound) {
   const floor = POSITION_FLOORS[player.position];
-  if (!floor) return player.vbd; // QB/TE: no boost, just the MAX_ROSTER_COUNTS cap above
+  // QB/TE/K/DEF: no boost, just the MAX_ROSTER_COUNTS cap above (and,
+  // for K/DEF, the late-round push via crossPositionValue).
+  if (!floor) return crossPositionValue(player);
   if ((rosterCounts[player.position] ?? 0) >= floor.targetCount) return player.vbd;
 
   return player.vbd * taperedMultiplier(floor.multiplier, currentRound);
@@ -71,5 +96,5 @@ export const DEFAULT_STRATEGY = "robustRB";
 
 export function compareByScoreThenVBD(a, b) {
   if (b.strategyScore !== a.strategyScore) return b.strategyScore - a.strategyScore;
-  return b.vbd - a.vbd;
+  return crossPositionValue(b) - crossPositionValue(a);
 }

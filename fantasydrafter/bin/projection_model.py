@@ -235,8 +235,20 @@ def apply_age_adjustment(
     """
     projections = projections.join(ages, on="player_id", how="left")
 
+    # DEF is a team, not a person — it has no age at all, and applying a
+    # skill-position decline curve to it wouldn't mean anything. Forced to
+    # 1.0 explicitly here rather than relying on age_at_season coming back
+    # null for a team-abbreviation "player_id" (which would also produce
+    # 1.0 via age_adjustment_factor's own None-handling) — this way it's a
+    # deliberate exemption, not an emergent side effect of two unrelated
+    # null-safety checks. K is NOT exempt from age adjustment in general,
+    # but K also isn't a key in AGE_CURVES (config.py), so it already gets
+    # 1.0 the same way any other uncovered position would — no separate
+    # handling needed for that one.
     factors = [
-        evidence_based_age_adjustment(
+        1.0
+        if pos == "DEF"
+        else evidence_based_age_adjustment(
             pos, age, recent_ppg, peak_ppg, age_curves, age_trend_dampening
         )
         for pos, age, recent_ppg, peak_ppg in zip(
@@ -727,9 +739,20 @@ def main(force_recompute: bool = False):
         if player_teams is None:
             print(f"Warning: no roster data found for {current_season} — skipping the currently-rostered filter entirely.")
         else:
+            # DEF is exempt: a team defense isn't "on a roster" or "a free
+            # agent" the way an individual player is — all 32 teams are
+            # always draftable as a DEF option. Its player_id is a team
+            # abbreviation (e.g. "SF"), which would never match an
+            # individual player_id from load_rosters() anyway — this is
+            # an explicit bypass rather than relying on that mismatch to
+            # silently exclude DEF from the filter's effect. K is NOT
+            # exempt — kickers are individual rostered players and their
+            # IDs do match load_rosters() normally.
             rostered_ids = set(player_teams["player_id"].to_list())
             before_count = projections.height
-            projections = projections.filter(pl.col("player_id").is_in(list(rostered_ids)))
+            projections = projections.filter(
+                pl.col("player_id").is_in(list(rostered_ids)) | (pl.col("position") == "DEF")
+            )
             print(f"  Kept {projections.height} of {before_count} players (dropped {before_count - projections.height} not on a current roster).")
 
         print("Applying position-specific age adjustment (evidence-based)...")
@@ -771,7 +794,7 @@ def main(force_recompute: bool = False):
 
     print("\nTop 5 projected players per position:")
     with pl.Config(tbl_rows=5):
-        for pos in ["QB", "RB", "WR", "TE"]:
+        for pos in ["QB", "RB", "WR", "TE", "K", "DEF"]:
             print(f"\n-- {pos} --")
             print(
                 result.filter(pl.col("position") == pos)

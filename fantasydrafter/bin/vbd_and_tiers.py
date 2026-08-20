@@ -27,11 +27,17 @@ from lib.config import (
     FLEX_ELIGIBLE_POSITIONS,
     TIER_GAP_PCT_THRESHOLD,
     TIER_MIN_GAP_POINTS,
+    LATE_ROUND_POSITIONS,
+    LATE_ROUND_VBD_OFFSET,
 )
 
-# Positions covered by the projection model so far (K/DEF need separate
-# data — see compute_fantasy_points.py notes).
-PROJECTED_POSITIONS = ["QB", "RB", "WR", "TE"]
+# Positions covered by the projection model. K/DEF use separate data/
+# scoring (see compute_fantasy_points.py) but flow through the exact same
+# VBD/tier logic below once they have projected_fantasy_points — neither
+# is FLEX-eligible (see FLEX_ELIGIBLE_POSITIONS in config.py), so they
+# don't participate in compute_starters_per_position's FLEX pool, just
+# their own guaranteed ROSTER_SLOTS count (1 each).
+PROJECTED_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 
 
 def load_projections() -> pl.DataFrame:
@@ -122,10 +128,17 @@ def compute_vbd(projections: pl.DataFrame, starters: dict[str, int]) -> pl.DataF
 
     # Overall (cross-position) VBD rank — this is what actually determines
     # draft order in practice, unlike the position-scoped position_rank
-    # from the projection model.
+    # from the projection model. K/DEF get pushed down by a flat offset
+    # for THIS ranking only (see LATE_ROUND_VBD_OFFSET in config.py) —
+    # the `vbd` column itself, used for tiers and K/DEF's own position-
+    # scoped ranking, is untouched.
+    overall_rank_value = (
+        pl.when(pl.col("position").is_in(list(LATE_ROUND_POSITIONS)))
+        .then(pl.col("vbd") - LATE_ROUND_VBD_OFFSET)
+        .otherwise(pl.col("vbd"))
+    )
     combined = combined.with_columns(
-        pl.col("vbd")
-        .rank(method="ordinal", descending=True)
+        overall_rank_value.rank(method="ordinal", descending=True)
         .cast(pl.Int64)
         .alias("vbd_rank_overall")
     )

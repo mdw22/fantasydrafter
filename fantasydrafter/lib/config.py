@@ -329,9 +329,11 @@ MIN_RES_STREAK_WEEKS = 4
  
 LEAGUE_SIZE = 14
  
-# Guaranteed starting slots per position (non-FLEX). K and DEF use separate
-# data/scoring not covered by this pipeline yet — included here for roster
-# math completeness but VBD/projections don't currently cover them.
+# Guaranteed starting slots per position (non-FLEX). K and DEF use
+# separate data/scoring (compute_fantasy_points.py has dedicated K/DEF
+# functions; neither is in AGE_CURVES below — DEF is a team with no age
+# at all, and K's aging pattern is different enough from skill positions
+# that the existing curves shouldn't be assumed to generalize to it).
 ROSTER_SLOTS = {
     "QB": 1,
     "RB": 2,
@@ -379,4 +381,35 @@ IR_SLOTS = 1
 # from firing on trivial gaps.
 TIER_GAP_PCT_THRESHOLD = 0.03
 TIER_MIN_GAP_POINTS = 3
- 
+
+# ---------------------------------------------------------------------------
+# K/DEF late-round push
+# ---------------------------------------------------------------------------
+#
+# K and DEF's raw VBD is mathematically consistent with every other
+# position's methodology, but it doesn't match how anyone actually
+# drafts: their week-to-week fantasy value is far more replaceable/
+# volatile than the point spread between the best and replacement-level
+# option suggests. Confirmed empirically before adding this — with no
+# adjustment, the best kicker landed at overall VBD rank ~49 (~round 4)
+# and the best defense at ~67 (~round 5), which would have the
+# recommendation engine suggesting a kicker or defense way earlier than
+# any real drafter would take one.
+#
+# Applied ONLY to the cross-position comparison (vbd_rank_overall in
+# vbd_and_tiers.py, and the equivalent crossPositionValue() in the React
+# app's strategies.js — the two are kept manually in sync, same offset,
+# same position set) — never to the exported `vbd` column/field itself,
+# so K/DEF's own tab still shows true, undiscounted, accurate VBD and
+# tiers among themselves.
+#
+# 300 is a flat point offset, not a percentage — picked so that even the
+# single BEST kicker/defense's discounted value still lands below the
+# WORST rostered skill-position player's true VBD (skill-position VBD
+# floor was ~-230 in the data checked when this was picked; top K was
+# ~62, top DEF ~43 — 300 clears that gap with real margin). A flat
+# offset was used instead of a multiplier because K/DEF's VBD is
+# positive while deep skill-position VBD is negative — no positive
+# multiplier can push a positive number below a negative one.
+LATE_ROUND_POSITIONS = {"K", "DEF"}
+LATE_ROUND_VBD_OFFSET = 300

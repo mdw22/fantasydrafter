@@ -11,6 +11,8 @@
   --pos-rb: #2f8f5b;
   --pos-wr: #2d6fa8;
   --pos-te: #b06a2c;
+  --pos-k: #5a7a8c;
+  --pos-def: #7a5c47;
 
   --font-display: "Anton", sans-serif;
   --font-body: "IBM Plex Sans", sans-serif;
@@ -459,6 +461,14 @@ body {
 }
 .chip--TE {
   background: var(--pos-te);
+  color: var(--chalk);
+}
+.chip--K {
+  background: var(--pos-k);
+  color: var(--chalk);
+}
+.chip--DEF {
+  background: var(--pos-def);
   color: var(--chalk);
 }
 
