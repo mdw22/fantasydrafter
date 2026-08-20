@@ -452,35 +452,39 @@ export default function App() {
 
       {!error && players && (
         <section className="recommendation-panel">
-          <div className="recommendation-panel__strategy">
-            <label htmlFor="strategy-select">Strategy</label>
-            <select
-              id="strategy-select"
-              value={activeStrategy}
-              onChange={(e) => setActiveStrategy(e.target.value)}
-            >
-              {Object.entries(STRATEGIES).map(([key, { label }]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
+          <div className="recommendation-panel__controls">
+            <div className="recommendation-panel__strategy">
+              <label htmlFor="strategy-select">Strategy</label>
+              <select
+                id="strategy-select"
+                value={activeStrategy}
+                onChange={(e) => setActiveStrategy(e.target.value)}
+              >
+                {Object.entries(STRATEGIES).map(([key, { label }]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className="autodraft-toggle">
+              <input
+                type="checkbox"
+                checked={autodraftEnabled}
+                onChange={(e) => setAutodraftEnabled(e.target.checked)}
+              />
+              Autodraft (testing)
+            </label>
           </div>
-          <label className="autodraft-toggle">
-            <input
-              type="checkbox"
-              checked={autodraftEnabled}
-              onChange={(e) => setAutodraftEnabled(e.target.checked)}
-            />
-            Autodraft (testing)
-          </label>
           {recommendation ? (
             <div className="recommendation-panel__pick">
-              <span className="recommendation-panel__label">Recommended:</span>
-              <PositionChip position={recommendation.top.position} />
-              <span className="recommendation-panel__name">
-                {recommendation.top.player_display_name}
-              </span>
+              <div className="recommendation-panel__pick-main">
+                <span className="recommendation-panel__label">Recommended:</span>
+                <PositionChip position={recommendation.top.position} />
+                <span className="recommendation-panel__name">
+                  {recommendation.top.player_display_name}
+                </span>
+              </div>
               {recommendation.forced ? (
                 <span className="recommendation-panel__also">
                   you don't have a {recommendation.top.position} yet &mdash; grab one now

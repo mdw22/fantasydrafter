@@ -65,13 +65,26 @@ body {
 
 .recommendation-panel {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
+  flex-direction: column;
+  gap: 10px;
   background: var(--field-deep);
   border: 2px solid var(--flag);
   padding: 12px 16px;
   margin-bottom: 16px;
+}
+
+/* Strategy select + autodraft toggle live on their own row, separate
+   from the recommended-pick row below — otherwise a long player name
+   could make the pick block too wide to fit next to them, pushing the
+   whole "Recommended:" line (including the label) down to a second
+   line as a unit. Keeping them on separate rows means the recommended
+   pick always starts at the same fixed position regardless of name
+   length. */
+.recommendation-panel__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
 .recommendation-panel__strategy {
@@ -114,6 +127,18 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   font-family: var(--font-body);
+}
+
+/* "Recommended: [chip] Name" always stays together on one line, never
+   breaking apart internally — only the trailing "also consider" /
+   forced note (a sibling of this, in .recommendation-panel__pick) is
+   allowed to wrap onto its own line below when space runs out. */
+.recommendation-panel__pick-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-width: 0;
 }
 
 .recommendation-panel__label {
