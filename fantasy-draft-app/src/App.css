@@ -258,17 +258,9 @@ body {
   font-size: 0.9rem;
 }
 
-.col-draft,
 .col-mine {
   width: 32px;
   text-align: center;
-}
-
-.draft-checkbox {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--flag);
-  cursor: pointer;
 }
 
 .mine-button {
@@ -303,6 +295,31 @@ body {
 .col-name {
   font-family: var(--font-body);
   font-weight: 500;
+  padding: 0;
+}
+
+.name-button {
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: var(--chalk);
+  font-family: inherit;
+  font-weight: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.name-button:hover {
+  background: rgba(241, 237, 228, 0.06);
+  text-decoration: underline;
+  text-decoration-color: rgba(241, 237, 228, 0.4);
+}
+
+.name-button:focus-visible {
+  outline: 2px solid var(--flag);
+  outline-offset: -2px;
 }
 
 .col-num {

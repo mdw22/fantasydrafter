@@ -80,14 +80,6 @@ function PositionChip({ position }) {
 function PlayerRow({ player, rankField, onDraft, onDraftMine }) {
   return (
     <tr>
-      <td className="col-draft">
-        <input
-          type="checkbox"
-          className="draft-checkbox"
-          aria-label={`Mark ${player.player_display_name} as drafted`}
-          onChange={() => onDraft(player.player_id)}
-        />
-      </td>
       <td className="col-mine">
         <button
           type="button"
@@ -101,7 +93,15 @@ function PlayerRow({ player, rankField, onDraft, onDraftMine }) {
       </td>
       <td className="col-rank">{player[rankField]}</td>
       <td className="col-name">
-        <PositionChip position={player.position} /> {player.player_display_name}
+        <button
+          type="button"
+          className="name-button"
+          aria-label={`Mark ${player.player_display_name} as drafted`}
+          title="Drafted by someone else"
+          onClick={() => onDraft(player.player_id)}
+        >
+          <PositionChip position={player.position} /> {player.player_display_name}
+        </button>
       </td>
       <td className="col-num">{player.projected_fantasy_points.toFixed(1)}</td>
       <td className="col-num">{player.vbd.toFixed(1)}</td>
@@ -209,7 +209,7 @@ function computeDraftGrade(players, draftedIds, myRosterIds) {
 function TierDivider({ tier }) {
   return (
     <tr className="tier-divider-row">
-      <td colSpan={7}>
+      <td colSpan={6}>
         <div className="tier-divider">
           <span className="tier-divider__chevron">▶</span>
           <span className="tier-divider__label">Tier {tier}</span>
@@ -554,7 +554,6 @@ export default function App() {
           <table className="board-table">
             <thead>
               <tr>
-                <th className="col-draft" aria-label="Drafted" />
                 <th className="col-mine" aria-label="Drafted by you" />
                 <th className="col-rank">Rk</th>
                 <th className="col-name">Player</th>
