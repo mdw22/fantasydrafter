@@ -3,7 +3,9 @@ import {
   STRATEGIES,
   DEFAULT_STRATEGY,
   MAX_ROSTER_COUNTS,
+  TEAM_COUNT,
   computeCurrentRound,
+  computeOpponentGap,
   computeRosterCounts,
   isPositionFull,
   compareByScoreThenVBD,
@@ -14,12 +16,15 @@ const POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"];
 const ROSTER_SLOT_TAB = "MY ROSTER";
 const TABS = ["ALL", ...POSITIONS, ROSTER_SLOT_TAB];
 
-// Snake draft: exactly 13 opponent picks separate each of your turns. Used
-// only by the autodraft testing toggle, not a true positional simulator.
-const OPPONENT_PICKS_PER_ROUND = 13;
+// League size minus you — used for the draft-grade "average other team"
+// baseline. Distinct concept from the opponent-pick simulation below
+// (that one varies per round now, via computeOpponentGap; this one is
+// just "how many other teams are there," always fixed).
+const OTHER_TEAM_COUNT = TEAM_COUNT - 1;
 
-// Tunable — how often an auto-pick takes the next-best-VBD player instead
-// of the top one, so all 13 opponents don't read as one uniform BPA bot.
+// Tunable — how often a simulated opponent pick takes the next-best-VBD
+// player instead of the top one, so simulated opponents don't all read
+// as one uniform BPA bot.
 const AUTODRAFT_ALT_PICK_CHANCE = 0.25;
 
 const STARTING_SLOTS = [
@@ -58,6 +63,8 @@ const GRADE_BANDS = [
 // just an inconvenience.
 const DRAFTED_STORAGE_KEY = "fantasydrafter:draftedPlayerIds";
 const MY_ROSTER_STORAGE_KEY = "fantasydrafter:myRosterPlayerIds";
+const DRAFT_STARTED_STORAGE_KEY = "fantasydrafter:draftStarted";
+const MY_PICK_POSITION_STORAGE_KEY = "fantasydrafter:myPickPosition";
 
 function loadIdSet(key) {
   try {
@@ -66,6 +73,16 @@ function loadIdSet(key) {
   } catch {
     return new Set();
   }
+}
+
+function loadBoolean(key) {
+  return localStorage.getItem(key) === "true";
+}
+
+function loadPickPosition() {
+  const raw = localStorage.getItem(MY_PICK_POSITION_STORAGE_KEY);
+  const parsed = raw === null ? null : Number(raw);
+  return parsed && parsed >= 1 && parsed <= TEAM_COUNT ? parsed : null;
 }
 
 function ValueBadge({ delta }) {
@@ -88,7 +105,14 @@ function PositionChip({ position }) {
   return <span className={`chip chip--${position}`}>{position}</span>;
 }
 
-function PlayerRow({ player, rankField, onDraft, onDraftMine, myRosterFull }) {
+function PlayerRow({ player, rankField, onDraft, onDraftMine, myRosterFull, draftStarted }) {
+  const mineDisabled = myRosterFull || !draftStarted;
+  const mineTitle = !draftStarted
+    ? "Enter your pick number and click Start Draft first"
+    : myRosterFull
+    ? "Your roster is full — reset to draft more"
+    : "Drafted by your team";
+
   return (
     <tr>
       <td className="col-mine">
@@ -96,12 +120,12 @@ function PlayerRow({ player, rankField, onDraft, onDraftMine, myRosterFull }) {
           type="button"
           className="mine-button"
           aria-label={
-            myRosterFull
-              ? "Your roster is full — reset to draft more"
+            mineDisabled
+              ? mineTitle
               : `Mark ${player.player_display_name} as drafted by your team`
           }
-          title={myRosterFull ? "Your roster is full — reset to draft more" : "Drafted by your team"}
-          disabled={myRosterFull}
+          title={mineTitle}
+          disabled={mineDisabled}
           onClick={() => onDraftMine(player.player_id)}
         >
           ★
@@ -113,7 +137,8 @@ function PlayerRow({ player, rankField, onDraft, onDraftMine, myRosterFull }) {
           type="button"
           className="name-button"
           aria-label={`Mark ${player.player_display_name} as drafted`}
-          title="Drafted by someone else"
+          title={!draftStarted ? "Enter your pick number and click Start Draft first" : "Drafted by someone else"}
+          disabled={!draftStarted}
           onClick={() => onDraft(player.player_id)}
         >
           <PositionChip position={player.position} /> {player.player_display_name}
@@ -203,7 +228,7 @@ function computeDraftGrade(players, draftedIds, myRosterIds) {
   const yourTotal = sumProjected(myRosterIds);
   const otherIds = [...draftedIds].filter((id) => !myRosterIds.has(id));
   const otherTotal = sumProjected(otherIds);
-  const otherAvg = otherTotal / OPPONENT_PICKS_PER_ROUND;
+  const otherAvg = otherTotal / OTHER_TEAM_COUNT;
 
   // No signal to compare against yet (shouldn't normally happen once your
   // own roster is full, but guards the divide either way).
@@ -215,6 +240,51 @@ function computeDraftGrade(players, draftedIds, myRosterIds) {
   const grade = GRADE_BANDS.find((band) => percentDiff >= band.min).grade;
 
   return { yourTotal, otherAvg, percentDiff, grade };
+}
+
+// Simulates `count` opponent picks on top of currentDraftedIds — used
+// both for the Start Draft pre-fill (picks before your first turn,
+// variable count) and the ongoing post-your-pick autodraft loop (still
+// gated by the autodraft toggle, count now snake-accurate instead of a
+// flat 13 — see computeOpponentGap in strategies.js). Each pick is the
+// highest-VBD player still available, no strategy scoring, with a 25%
+// chance of taking the next-best instead so simulated opponents don't
+// all read as one uniform BPA bot. A fresh per-call position tally
+// (not tied to any real roster) keeps one call from piling up e.g. 10
+// QBs in a row; stops early if the pool runs out or every remaining
+// position is capped for this call. Returns a NEW Set — never mutates
+// currentDraftedIds.
+//
+// The position cap (MAX_ROSTER_COUNTS) represents ONE team's realistic
+// max at a position — fine when count is ~13 (one round = 13 different
+// opponents each picking once), but a snake-draft gap can span up to 26
+// (two full rounds' worth, for a draft position near either end). Capping
+// a 26-pick call at a single team's limits (e.g. RB:6) would cut the
+// batch off after ~18 total picks, well short of 26, silently under-
+// filling. Scaling the cap by how many "rounds" the count spans (1 round
+// = TEAM_COUNT-1 opponent picks) keeps the original single-round
+// behavior unchanged while correctly allowing a multi-round gap to use a
+// proportionally larger cap.
+function simulateOpponentPicks(count, currentDraftedIds, players) {
+  const roundsSpanned = Math.max(1, Math.ceil(count / (TEAM_COUNT - 1)));
+  const batchCap = (position) => (MAX_ROSTER_COUNTS[position] ?? Infinity) * roundsSpanned;
+
+  const nextDrafted = new Set(currentDraftedIds);
+  const batchCounts = { QB: 0, RB: 0, WR: 0, TE: 0 };
+  for (let i = 0; i < count; i++) {
+    const candidates = players
+      .filter((p) => !nextDrafted.has(p.player_id))
+      .filter((p) => (batchCounts[p.position] ?? 0) < batchCap(p.position))
+      .sort((a, b) => b.vbd - a.vbd);
+    if (candidates.length === 0) break; // pool exhausted or every position capped this batch
+
+    const takeAlt = candidates.length > 1 && Math.random() < AUTODRAFT_ALT_PICK_CHANCE;
+    const pick = takeAlt ? candidates[1] : candidates[0];
+
+    nextDrafted.add(pick.player_id);
+    batchCounts[pick.position] = (batchCounts[pick.position] ?? 0) + 1;
+  }
+  return nextDrafted;
 }
 
 function TierDivider({ tier }) {
@@ -240,6 +310,8 @@ export default function App() {
   const [activeStrategy, setActiveStrategy] = useState(DEFAULT_STRATEGY);
   const [sortByStrategy, setSortByStrategy] = useState(false);
   const [autodraftEnabled, setAutodraftEnabled] = useState(false);
+  const [draftStarted, setDraftStarted] = useState(() => loadBoolean(DRAFT_STARTED_STORAGE_KEY));
+  const [myPickPosition, setMyPickPosition] = useState(loadPickPosition);
 
   useEffect(() => {
     // Fetched from public/data/cheat_sheet.json at runtime — regenerate
@@ -262,7 +334,49 @@ export default function App() {
     localStorage.setItem(MY_ROSTER_STORAGE_KEY, JSON.stringify([...myRosterIds]));
   }, [myRosterIds]);
 
+  useEffect(() => {
+    localStorage.setItem(DRAFT_STARTED_STORAGE_KEY, String(draftStarted));
+  }, [draftStarted]);
+
+  useEffect(() => {
+    if (myPickPosition === null) {
+      localStorage.removeItem(MY_PICK_POSITION_STORAGE_KEY);
+    } else {
+      localStorage.setItem(MY_PICK_POSITION_STORAGE_KEY, String(myPickPosition));
+    }
+  }, [myPickPosition]);
+
+  const isValidPickPosition =
+    myPickPosition !== null && myPickPosition >= 1 && myPickPosition <= TEAM_COUNT;
+
+  const handlePickPositionChange = (e) => {
+    const raw = e.target.value;
+    if (raw === "") {
+      setMyPickPosition(null);
+      return;
+    }
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) {
+      setMyPickPosition(null);
+      return;
+    }
+    setMyPickPosition(Math.min(TEAM_COUNT, Math.max(1, Math.round(parsed))));
+  };
+
+  // Fills in the picks that would've happened before your turn if you're
+  // joining a draft at any position other than #1 — a structural
+  // necessity (the board can't sensibly show you "on the clock" for pick
+  // 5 with picks 1-4 not existing), not an optional test convenience, so
+  // this runs regardless of the autodraft toggle.
+  const handleStartDraft = () => {
+    if (draftStarted || !players || !isValidPickPosition) return;
+    const picksBeforeMe = myPickPosition - 1;
+    setDraftedIds(simulateOpponentPicks(picksBeforeMe, draftedIds, players));
+    setDraftStarted(true);
+  };
+
   const handleDraft = (playerId) => {
+    if (!draftStarted) return;
     setDraftedIds((prev) => new Set(prev).add(playerId));
   };
 
@@ -277,37 +391,25 @@ export default function App() {
   // pick instead of one. A plain click handler isn't re-invoked that way,
   // so reading draftedIds from closure here is safe.
   const handleDraftMine = (playerId) => {
-    // Belt-and-suspenders: the ★ button is already disabled once the
-    // roster is full (see myRosterFull below), but guard the handler
-    // itself too rather than relying solely on the UI being disabled.
-    if (myRosterIds.size >= FULL_ROSTER_SIZE) return;
+    // Belt-and-suspenders: the ★ button is already disabled before the
+    // draft starts and once the roster is full (see myRosterFull below),
+    // but guard the handler itself too rather than relying solely on the
+    // UI being disabled.
+    if (!draftStarted || myRosterIds.size >= FULL_ROSTER_SIZE) return;
 
-    const nextDrafted = new Set(draftedIds).add(playerId);
+    let nextDrafted = new Set(draftedIds).add(playerId);
 
-    if (autodraftEnabled && players) {
-      // Testing aid: fill the next 13 (one full round of opponents) with
-      // the highest-VBD player still available each time, no strategy
-      // involved. A fresh per-batch position tally (not your own roster
-      // counts) keeps one round from piling up e.g. 10 QBs in a row.
-      const batchCounts = { QB: 0, RB: 0, WR: 0, TE: 0 };
-      for (let i = 0; i < OPPONENT_PICKS_PER_ROUND; i++) {
-        const candidates = players
-          .filter((p) => !nextDrafted.has(p.player_id))
-          .filter(
-            (p) => (batchCounts[p.position] ?? 0) < (MAX_ROSTER_COUNTS[p.position] ?? Infinity)
-          )
-          .sort((a, b) => b.vbd - a.vbd);
-        if (candidates.length === 0) break; // pool exhausted or every position capped this batch
-
-        // Usually take the top (raw-VBD-best) candidate, but sometimes take
-        // the next-best instead — the "also consider" option from the same
-        // pool, not a full strategy re-score.
-        const takeAlt = candidates.length > 1 && Math.random() < AUTODRAFT_ALT_PICK_CHANCE;
-        const pick = takeAlt ? candidates[1] : candidates[0];
-
-        nextDrafted.add(pick.player_id);
-        batchCounts[pick.position] = (batchCounts[pick.position] ?? 0) + 1;
-      }
+    // Testing aid: fills in the rest of this round's opponent picks, so
+    // you don't have to manually click through every one. The GAP is
+    // snake-accurate (see computeOpponentGap) — round 1's pre-fill is
+    // handled separately by Start Draft above; this covers every round
+    // after that. Unlike the Start Draft pre-fill, this remains gated by
+    // the toggle — it's a convenience for testing, not a structural
+    // requirement (you can always mark opponent picks by hand instead).
+    if (autodraftEnabled && players && isValidPickPosition) {
+      const round = computeCurrentRound(draftedIds.size);
+      const gap = computeOpponentGap(round, myPickPosition);
+      nextDrafted = simulateOpponentPicks(gap, nextDrafted, players);
     }
 
     setDraftedIds(nextDrafted);
@@ -321,6 +423,8 @@ export default function App() {
     }
     setDraftedIds(new Set());
     setMyRosterIds(new Set());
+    setDraftStarted(false);
+    setMyPickPosition(null);
   };
 
   const available = useMemo(() => {
@@ -536,18 +640,41 @@ export default function App() {
       </nav>
 
       <div className="draft-controls">
-        <label
-          className="sort-toggle"
-          title="Only affects the ALL tab's ordering"
-        >
-          <input
-            type="checkbox"
-            checked={sortByStrategy}
-            disabled={activeTab !== "ALL"}
-            onChange={(e) => setSortByStrategy(e.target.checked)}
-          />
-          Sort by strategy
-        </label>
+        <div className="draft-controls__left">
+          <div className="start-draft">
+            <label htmlFor="my-pick-position">My Pick #</label>
+            <input
+              id="my-pick-position"
+              type="number"
+              min={1}
+              max={TEAM_COUNT}
+              placeholder="1-14"
+              value={myPickPosition ?? ""}
+              disabled={draftStarted}
+              onChange={handlePickPositionChange}
+            />
+            <button
+              type="button"
+              className="start-draft-button"
+              onClick={handleStartDraft}
+              disabled={draftStarted || !isValidPickPosition}
+            >
+              Start Draft
+            </button>
+          </div>
+          <label
+            className="sort-toggle"
+            title="Only affects the ALL tab's ordering"
+          >
+            <input
+              type="checkbox"
+              checked={sortByStrategy}
+              disabled={activeTab !== "ALL"}
+              onChange={(e) => setSortByStrategy(e.target.checked)}
+            />
+            Sort by strategy
+          </label>
+        </div>
         <div className="draft-controls__status">
           <span className="drafted-count">{draftedIds.size} drafted</span>
           <span className="mine-count">{myRosterIds.size} on your roster</span>
@@ -560,6 +687,12 @@ export default function App() {
           Reset
         </button>
       </div>
+
+      {!draftStarted && (
+        <p className="start-draft-prompt">
+          Enter your pick number and click Start Draft to begin.
+        </p>
+      )}
 
       <main className="board">
         {error && (
@@ -647,6 +780,7 @@ export default function App() {
                       onDraft={handleDraft}
                       onDraftMine={handleDraftMine}
                       myRosterFull={myRosterFull}
+                      draftStarted={draftStarted}
                     />
                   ))
                 : groupedByTier.map((group) => (
@@ -656,6 +790,7 @@ export default function App() {
                       onDraft={handleDraft}
                       onDraftMine={handleDraftMine}
                       myRosterFull={myRosterFull}
+                      draftStarted={draftStarted}
                     />
                   ))}
             </tbody>
@@ -666,7 +801,7 @@ export default function App() {
   );
 }
 
-function FragmentGroup({ group, onDraft, onDraftMine, myRosterFull }) {
+function FragmentGroup({ group, onDraft, onDraftMine, myRosterFull, draftStarted }) {
   return (
     <>
       <TierDivider tier={group.tier} />
@@ -678,6 +813,7 @@ function FragmentGroup({ group, onDraft, onDraftMine, myRosterFull }) {
           onDraft={onDraft}
           onDraftMine={onDraftMine}
           myRosterFull={myRosterFull}
+          draftStarted={draftStarted}
         />
       ))}
     </>

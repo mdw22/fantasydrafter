@@ -638,21 +638,27 @@ Two more additions on top of the above, in `App.jsx`.
 ### Draft grade
 
 A letter grade (D through A+) shown on the My Roster tab, unlocked once
-your roster hits `FULL_ROSTER_SIZE` (14 — derived from the roster-slot
-model itself: 6 starting slots + FLEX + 7 bench, so it can't drift out
-of sync with that model). `computeDraftGrade()` in `App.jsx`:
+your roster hits `FULL_ROSTER_SIZE` (originally 14; now 16 since the
+K/DEF work added DEF/K starting slots to `STARTING_SLOTS` — this
+threshold is derived from that array's length rather than a separate
+hardcoded number, so it moved automatically when K/DEF were added, no
+manual sync needed). `computeDraftGrade()` in `App.jsx`:
 
 - Your total: sum of `projected_fantasy_points` across your (★) roster.
 - The comparison baseline: sum of `projected_fantasy_points` across
-  every OTHER drafted player, divided evenly by 13. **This is a single
-  average-opponent baseline, not a real per-team distribution** — the
-  app only tracks "mine" vs. "drafted by someone else," not draft order
-  or which specific opponent took which player, so there's no way to
-  build 13 individual team totals to rank against. Discussed directly
-  with you: the alternative (tracking real draft order to bucket
-  opponent picks round-robin into 13 simulated teams, enabling actual
-  rank-based grading) was explicitly turned down in favor of this
-  simpler approach.
+  every OTHER drafted player, divided evenly by `OTHER_TEAM_COUNT`
+  (`TEAM_COUNT - 1` = 13). **This is a single average-opponent baseline,
+  not a real per-team distribution** — the app only tracks "mine" vs.
+  "drafted by someone else," not draft order or which specific opponent
+  took which player, so there's no way to build 13 individual team
+  totals to rank against. Discussed directly with you: the alternative
+  (tracking real draft order to bucket opponent picks round-robin into
+  13 simulated teams, enabling actual rank-based grading) was explicitly
+  turned down in favor of this simpler approach — though note the
+  "Start Draft" flow (below) DOES now track a real draft position and
+  snake order for the opponent-simulation logic; it just isn't wired
+  into the draft-grade baseline, which still treats all non-mine picks
+  as one undifferentiated pool.
 - Grade bands are percent-above/below that baseline (tunable in
   `GRADE_BANDS`): A+ ≥+15%, A ≥+5%, B ≥-5%, C ≥-15%, D below that.
 - Verified by seeding localStorage directly (top-14-by-projection as
@@ -661,6 +667,106 @@ of sync with that model). `computeDraftGrade()` in `App.jsx`:
   computation exactly, plus the locked pre-14-players state and the
   panel's color coding (green A/A+, amber B, red C/D). No console
   errors.
+
+### Small UI fixes (undocumented at the time, noted here after the fact)
+
+- **"Recommended:" no longer shifts for a long player name**: Strategy
+  select + Autodraft toggle moved to their own row, separate from the
+  recommended-pick row (`.recommendation-panel__controls` /
+  `.recommendation-panel__pick`), so a long name can't make the pick
+  block too wide to fit next to them and push the whole line down as a
+  unit. The label/chip/name group also got wrapped in its own
+  `flex-wrap: nowrap` container (`.recommendation-panel__pick-main`) so
+  they can never break apart from each other — only the trailing "also
+  consider" / forced note is still allowed to wrap onto its own line.
+- **Roster locks at `FULL_ROSTER_SIZE`**: once `myRosterIds.size >=
+  FULL_ROSTER_SIZE`, the ★ button disables (both in the UI and inside
+  `handleDraftMine` itself) until Reset, and the recommendation panel
+  shows "Your roster is full — reset to draft more" instead of a pick.
+  Only the ★ ("mine") action is blocked — clicking a name to mark
+  someone else's pick still works normally throughout, since that
+  tracking needs to continue for the rest of the draft regardless of
+  your own roster status.
+
+### Start Draft flow (snake-accurate opponent simulation)
+
+Replaces "autodraft only ever fires after your ★ pick, always simulating
+a flat 13" with a real draft-start flow: enter your draft position
+(1-`TEAM_COUNT`), click **Start Draft**, and picks that would've
+happened before your turn get filled in automatically.
+
+- **New state**: `draftStarted` (bool) and `myPickPosition`
+  (int 1-14 or `null`), both persisted to localStorage (new keys
+  `fantasydrafter:draftStarted` / `fantasydrafter:myPickPosition`) so a
+  reload mid-draft doesn't drop back into the "enter your position"
+  state. Both reset via `handleReset`, same as `draftedIds`/`myRosterIds`.
+- **Board is inert until Start Draft is clicked**: both the ★ button and
+  the plain name-click ("drafted by someone else") are disabled —
+  previously only the ★ button had a disabled state (for the roster-full
+  case); this extends the same pattern to the name-click for the
+  pre-draft-start case specifically. A prompt below the controls row
+  ("Enter your pick number and click Start Draft to begin.") explains why.
+- **Start Draft pre-fill**: `picksBeforeMe = myPickPosition - 1` opponent
+  picks get simulated immediately via the shared helper (see below) —
+  this happens **unconditionally**, regardless of the "Autodraft
+  (testing)" toggle. These aren't optional test picks; they're a
+  structural necessity (the board can't sensibly show you "on the clock"
+  for pick 5 with picks 1-4 not existing).
+- **Ongoing rounds now use real snake math** instead of a flat 13:
+  `computeSnakePickNumber(round, myPickPosition, teamCount)` and
+  `computeOpponentGap(round, myPickPosition, teamCount)` in
+  `strategies.js` implement the standard snake formula (odd rounds
+  1..N, even rounds N..1) and derive the gap between your pick in round
+  R and round R+1. This gap-fill step (unlike the initial pre-fill)
+  **remains gated by the Autodraft toggle** — it's still a testing
+  convenience for the ongoing draft, not a structural requirement, since
+  you can always mark opponent picks by hand instead.
+- **Refactor**: the inline "simulate N picks" logic that used to live
+  directly in `handleDraftMine` (hardcoded around the old flat
+  `OPPONENT_PICKS_PER_ROUND = 13`) was extracted into a standalone
+  `simulateOpponentPicks(count, currentDraftedIds, players)` in
+  `App.jsx`, called by both Start Draft (variable count) and the ongoing
+  per-round autodraft loop (now a computed count via
+  `computeOpponentGap`). `OPPONENT_PICKS_PER_ROUND` no longer exists as
+  a constant — count is always a per-call computed value now. Preserved
+  the existing synchronous-closure-before-`setDraftedIds` pattern (the
+  `Math.random()` + `React.StrictMode` double-invocation bug fixed
+  earlier — see the autodraft-randomness entry above — would have
+  reappeared here if this had been written as an updater function).
+- **Real bug found and fixed during this work**: `simulateOpponentPicks`'s
+  position-cap logic (`MAX_ROSTER_COUNTS`, meant to stop one simulated
+  batch from piling up e.g. 10 QBs in a row) was designed under the
+  assumption that `count` ≈ 13 (one round = 13 different opponents each
+  picking once) — a cap of "one team's max at a position" made sense
+  against that. But a snake gap can be as large as 26 (two full rounds'
+  worth, for a draft position near either extreme), and capping a
+  26-pick call at a single team's limits (QB:2+RB:6+WR:6+TE:2+K:1+DEF:1
+  = 18 total) cut the batch off after ~18 picks, silently under-filling
+  by 8. Fixed by scaling the cap by how many "rounds" the count spans
+  (`roundsSpanned = Math.ceil(count / (TEAM_COUNT - 1))`, capped
+  multiplied by that) — unchanged behavior for the common ~13-pick case
+  (`roundsSpanned` stays 1), correctly larger caps for bigger multi-round
+  gaps. Also had to fix an unrelated naming collision while removing the
+  old constant: `computeDraftGrade`'s "divide by 13 other teams"
+  baseline had been reusing `OPPONENT_PICKS_PER_ROUND` for a completely
+  different concept (team count, not pick count) — split into its own
+  `OTHER_TEAM_COUNT = TEAM_COUNT - 1`.
+- **Validation**: the pick-position `<input>` clamps to 1-`TEAM_COUNT` on
+  every change (typing 20 snaps to 14, 0 snaps to 1) rather than just
+  rejecting on submit; Start Draft is disabled whenever the value isn't
+  valid, as a second layer on top of the clamping.
+- **Verified exhaustively** (this was flagged as the highest-risk new
+  logic, worth dedicated test cases): position 1 (round1→2 gap=26,
+  round2→3 gap=0), position 14 (inverse), and position 7 (middle) all
+  checked against hand-derived expected totals using the correct
+  formula — `total drafted after your round-N pick = pickNumber(N+1,
+  myPickPosition) - 1`, since the gap-fill for the NEXT round happens
+  immediately as part of the same click that completes round N (a
+  subtlety that tripped up the first draft of the test itself before
+  landing on the right formula). All matched exactly across 4+ rounds
+  per position. Also reconfirmed the position-cap regression check
+  (a 13-pick pre-fill still respects QB/TE ≤ their caps) and the
+  board-inert / Reset-clears-position / out-of-range-clamping behaviors.
 
 ## Where things stand (session handoff)
 

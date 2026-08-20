@@ -9,6 +9,27 @@ export function computeCurrentRound(totalDraftedCount) {
   return Math.floor(totalDraftedCount / TEAM_COUNT) + 1;
 }
 
+// Snake draft: odd rounds run 1..N, even rounds reverse to N..1. Your
+// overall pick number in a given round, for a fixed draft position
+// myPickPosition (1..teamCount).
+export function computeSnakePickNumber(round, myPickPosition, teamCount = TEAM_COUNT) {
+  return round % 2 === 1
+    ? (round - 1) * teamCount + myPickPosition
+    : (round - 1) * teamCount + (teamCount - myPickPosition + 1);
+}
+
+// How many opponent picks happen between your pick in `round` and your
+// pick in `round + 1`. Alternates by parity: going odd->even the gap is
+// 2*(teamCount - myPickPosition); going even->odd it's 2*(myPickPosition
+// - 1). Any two consecutive gaps always sum to 2*(teamCount - 1) — the
+// total "other" picks across any 2 consecutive rounds — a useful
+// invariant to test against regardless of position.
+export function computeOpponentGap(round, myPickPosition, teamCount = TEAM_COUNT) {
+  const current = computeSnakePickNumber(round, myPickPosition, teamCount);
+  const next = computeSnakePickNumber(round + 1, myPickPosition, teamCount);
+  return next - current - 1;
+}
+
 export function computeRosterCounts(players, myRosterIds) {
   const counts = { QB: 0, RB: 0, WR: 0, TE: 0, K: 0, DEF: 0 };
   for (const player of players) {

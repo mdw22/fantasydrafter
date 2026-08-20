@@ -212,10 +212,77 @@ body {
   margin-bottom: 20px;
 }
 
+.draft-controls__left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-self: start;
+}
+
 .draft-controls__status {
   display: flex;
   gap: 16px;
   justify-content: center;
+}
+
+.start-draft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: rgba(241, 237, 228, 0.7);
+  white-space: nowrap;
+}
+
+.start-draft input[type="number"] {
+  width: 50px;
+  background: var(--field);
+  color: var(--chalk);
+  border: 1px solid var(--hash);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.start-draft input[type="number"]:disabled {
+  opacity: 0.5;
+}
+
+.start-draft-button {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  background: transparent;
+  color: var(--flag);
+  border: 1px solid var(--flag);
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.start-draft-button:hover:not(:disabled) {
+  background: var(--flag);
+  color: var(--ink);
+}
+
+.start-draft-button:focus-visible {
+  outline: 2px solid var(--flag);
+  outline-offset: 2px;
+}
+
+.start-draft-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.start-draft-prompt {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--flag);
+  margin: -12px 0 20px;
 }
 
 /* Read-only status, deliberately quiet — same de-emphasized treatment as
@@ -232,7 +299,6 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  justify-self: start;
   font-family: var(--font-mono);
   font-size: 0.8rem;
   color: rgba(241, 237, 228, 0.7);
